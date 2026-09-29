@@ -6,6 +6,7 @@ one-off overrides keep working. Nothing here holds a secret of its own.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -18,8 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_env() -> None:
-    """Load ``.env`` if present. Missing file is fine (CI, containers)."""
-    load_dotenv(ROOT / ".env", override=False)
+    """Load ``.env`` if present. Missing or unreadable is fine (CI, containers)."""
+    with contextlib.suppress(OSError):
+        # In containers the file may be unreadable, but env_file already set these vars.
+        load_dotenv(ROOT / ".env", override=False)
 
 
 def _require(name: str) -> str:

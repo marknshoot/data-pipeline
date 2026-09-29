@@ -2,8 +2,8 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help env install up-core up-stream up-bi up down ps logs clean lint fmt test check \
-	schema seed seed-reset gen-orders gen-events
+.PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
+	schema seed seed-reset gen-orders gen-events extract lake-ls
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -25,8 +25,11 @@ up-stream: env ## Start kafka and create topics
 up-bi: env ## Start metabase (needs core)
 	$(COMPOSE) --profile core --profile bi up -d --wait postgres metabase
 
-schema: env ## Apply the OLTP schema to a running Postgres (idempotent)
-	$(COMPOSE) --profile core exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < postgres/init/01_schema.sql
+schema: env ## Apply the OLTP schema + pipeline metadata to a running Postgres
+	@for f in postgres/init/0[1-9]_*.sql; do \
+		echo "applying $$f"; \
+		$(COMPOSE) --profile core exec -T postgres sh -c 'psql -q -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < $$f || exit 1; \
+	done
 
 seed: env ## Seed reference data + order history (fails if already seeded)
 	uv run python -m generators.seed $(ARGS)
@@ -40,7 +43,17 @@ gen-orders: env ## Continuously generate orders (make gen-orders ARGS="--rate 10
 gen-events: env ## Publish clickstream events to Kafka (make gen-events ARGS="--rate 40")
 	uv run python -m generators.event_generator $(ARGS)
 
+extract: env ## Incremental OLTP extract to the lake (make extract ARGS="--tables orders")
+	uv run python -m ingestion.oltp_extract --incremental $(ARGS)
+
+lake-ls: env ## List objects in the lake (make lake-ls ARGS="raw/oltp/orders")
+	uv run python -m ingestion.lake $(ARGS)
+
 up: up-core up-stream ## Start core + stream
+
+up-orch: env ## Start Airflow (api-server, scheduler, dag-processor) + its core deps
+	$(COMPOSE) --profile core --profile orch up -d --wait postgres seaweedfs \
+		airflow-api-server airflow-scheduler airflow-dag-processor
 
 down: ## Stop all services (keeps volumes)
 	$(COMPOSE) --profile '*' down

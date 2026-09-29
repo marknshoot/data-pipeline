@@ -4,7 +4,7 @@ A self-hosted, end-to-end data engineering project for a simulated Southeast Asi
 Batch extracts from the app database and a live Kafka clickstream flow into an S3-compatible data lake.
 Spark cleans the data, dbt models it in ClickHouse, Airflow schedules the pipeline, and Metabase shows the dashboards.
 
-> Status: **Phase 1 (sources)**. See [PLAN.md](PLAN.md) for the full roadmap and checklist.
+> Status: **Phase 2 (lake + batch ingestion)**. See [PLAN.md](PLAN.md) for the full roadmap and checklist.
 
 ## Stack
 
@@ -29,6 +29,7 @@ make install      # Python dev tools + pre-commit hooks
 make up-core      # postgres, seaweedfs (S3), clickhouse
 make seed         # Faker users/sellers/products + 30 days of order history
 make up-stream    # kafka + topic creation
+make up-orch      # airflow (http://localhost:8080)
 make up-bi        # metabase at http://localhost:3000
 make ps           # status
 make down         # stop (data is kept)
@@ -43,6 +44,7 @@ Every container has a memory limit. All ports bind to `127.0.0.1` only.
 | S3 (SeaweedFS) | `http://localhost:8333` |
 | ClickHouse | `http://localhost:8123` (HTTP), `localhost:9000` (native) |
 | Kafka | `localhost:9094` |
+| Airflow | `http://localhost:8080` |
 | Metabase | `http://localhost:3000` |
 
 ## Simulated source data
@@ -76,12 +78,61 @@ the 9.9 / 11.11 / 12.12 flash-sale days (local time `Asia/Jakarta`). Because lat
 events can cross the schema-v2 boundary, a single live run naturally contains both
 schema versions.
 
+## Batch ingestion and orchestration
+
+`make extract` copies rows changed since a stored watermark from Postgres into the
+lake as Parquet:
+
+```
+s3://lake/raw/oltp/<table>/dt=YYYY-MM-DD/<window>.parquet
+```
+
+The object key is derived from the extract window, so **re-running an interval
+overwrites its object instead of appending duplicates** — that is what makes
+backfills safe. A row updated after its interval's end is picked up again by a
+later interval and deduplicated downstream by newest `updated_at`.
+
+Airflow schedules the same job hourly:
+
+```bash
+make up-orch                 # postgres + seaweedfs + airflow, UI on :8080
+make extract ARGS="--history-days 400"   # one-off incremental run
+make lake-ls ARGS="raw/oltp/orders"      # inspect the lake
+uv run python -m ingestion.lake --stats raw/oltp
+```
+
+The `oltp_extract` DAG runs hourly with `catchup=True`, so unpausing it fills in
+every missed hour; each task retries twice and has a 20-minute timeout. To re-run a
+window (safe, idempotent):
+
+```bash
+docker compose --profile core --profile orch exec airflow-scheduler \
+  airflow backfill create --dag-id oltp_extract \
+  --from-date 2026-09-26T00:00:00+00:00 --to-date 2026-09-29T00:00:00+00:00 \
+  --reprocess-behavior completed
+```
+
+### Airflow 3 notes
+
+Three non-obvious settings are required when the components run in separate
+containers (all are set in `docker-compose.yml`):
+
+* `AIRFLOW__SCHEDULER__CREATE_CRON_DATA_INTERVALS=true` — Airflow 3 otherwise gives
+  cron DAGs a zero-width data interval, so `data_interval_start == data_interval_end`.
+* `AIRFLOW__CORE__EXECUTION_API_SERVER_URL` — tasks call the execution API, which
+  defaults to `localhost:8080` (the wrong container once components are split).
+* `SimpleAuthManager` with `all_admins`, since Airflow 3 has no login by default for
+  a local deployment and the API is bound to `127.0.0.1` only. Switch to a real auth
+  manager before exposing this anywhere.
+
 ## Development
 
 ```bash
-make schema       # (re)apply the OLTP schema to a running Postgres
+make schema       # (re)apply the OLTP schema + pipeline metadata to a running Postgres
 make seed         # seed reference data + history
 make seed-reset   # wipe and re-seed
+make extract      # incremental OLTP extract to the lake
+make lake-ls      # list lake objects (make lake-ls ARGS="raw/oltp")
 make lint         # ruff + sqlfluff
 make test         # pytest
 make check        # lint + test

@@ -155,13 +155,13 @@ dateng/
 - [x] Traffic patterns: busier in the evening, and a flash-sale spike (e.g. 9.9 or 11.11)
 - [x] Unit tests for the generators
 
-### Phase 2: Lake and batch ingestion (week 2)
-- [ ] SeaweedFS S3 gateway, `lake` bucket, access keys from env
-- [ ] `oltp_extract.py`: incremental by `updated_at` watermark → Parquet in `raw/oltp/...`
-- [ ] Safe to re-run: re-running the same interval overwrites its partition and doesn't duplicate data
-- [ ] Airflow up (LocalExecutor, metadata stored in Postgres)
-- [ ] DAG `oltp_extract` (hourly, catchup enabled, retries and a timeout on each task)
-- [ ] Test: run a backfill for 3 past days twice and check row counts stay the same
+### Phase 2: Lake and batch ingestion (week 2) ✅
+- [x] SeaweedFS S3 gateway, `lake` bucket, access keys from env
+- [x] `oltp_extract.py`: incremental by `updated_at` watermark → Parquet in `raw/oltp/...`
+- [x] Safe to re-run: re-running the same interval overwrites its partition and doesn't duplicate data
+- [x] Airflow up (LocalExecutor, metadata stored in Postgres)
+- [x] DAG `oltp_extract` (hourly, catchup enabled, retries and a timeout on each task)
+- [x] Test: run a backfill for 3 past days twice and check row counts stay the same
 
 ### Phase 3: Warehouse and dbt (weeks 2–3). This is the most important phase.
 - [ ] ClickHouse `raw` tables. Load from the lake with `INSERT ... SELECT FROM s3(...)`

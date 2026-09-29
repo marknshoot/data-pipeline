@@ -1,0 +1,16 @@
+# Keep the Airflow image build context small and secret-free.
+.venv/
+.git/
+.gitignore
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pre-commit-config.yaml
+uv.lock
+.env
+data/
+airflow/logs/
+*.parquet
+*.md
