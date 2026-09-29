@@ -148,12 +148,12 @@ dateng/
 - [x] `.env.example` with all credentials as placeholders
 - [x] `Makefile`: `up`, `down`, `logs`, `ps`, `clean`
 
-### Phase 1: Sources (days 3–6)
-- [ ] Postgres schema and seed data (Faker): about 10k users, 500 sellers, 5k products
-- [ ] `order_generator`: creates new orders continuously, plus updates (order status changes, price changes, users moving city)
-- [ ] `event_generator`: writes to Kafka with duplicates, late events, schema v2 and malformed records
-- [ ] Traffic patterns: busier in the evening, and a flash-sale spike (e.g. 9.9 or 11.11)
-- [ ] Unit tests for the generators
+### Phase 1: Sources (days 3–6) ✅
+- [x] Postgres schema and seed data (Faker): about 10k users, 500 sellers, 5k products
+- [x] `order_generator`: creates new orders continuously, plus updates (order status changes, price changes, users moving city)
+- [x] `event_generator`: writes to Kafka with duplicates, late events, schema v2 and malformed records
+- [x] Traffic patterns: busier in the evening, and a flash-sale spike (e.g. 9.9 or 11.11)
+- [x] Unit tests for the generators
 
 ### Phase 2: Lake and batch ingestion (week 2)
 - [ ] SeaweedFS S3 gateway, `lake` bucket, access keys from env

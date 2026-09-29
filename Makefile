@@ -2,7 +2,8 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help env install up-core up-stream up-bi up down ps logs clean lint fmt test check
+.PHONY: help env install up-core up-stream up-bi up down ps logs clean lint fmt test check \
+	schema seed seed-reset gen-orders gen-events
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -23,6 +24,21 @@ up-stream: env ## Start kafka and create topics
 
 up-bi: env ## Start metabase (needs core)
 	$(COMPOSE) --profile core --profile bi up -d --wait postgres metabase
+
+schema: env ## Apply the OLTP schema to a running Postgres (idempotent)
+	$(COMPOSE) --profile core exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < postgres/init/01_schema.sql
+
+seed: env ## Seed reference data + order history (fails if already seeded)
+	uv run python -m generators.seed $(ARGS)
+
+seed-reset: env ## Wipe and re-seed the OLTP database
+	uv run python -m generators.seed --reset $(ARGS)
+
+gen-orders: env ## Continuously generate orders (make gen-orders ARGS="--rate 10")
+	uv run python -m generators.order_generator $(ARGS)
+
+gen-events: env ## Publish clickstream events to Kafka (make gen-events ARGS="--rate 40")
+	uv run python -m generators.event_generator $(ARGS)
 
 up: up-core up-stream ## Start core + stream
 

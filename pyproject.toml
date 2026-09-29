@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "ShopStream: end-to-end, self-hosted marketplace data platform (Kafka, SeaweedFS S3, Spark, ClickHouse, dbt, Airflow, Metabase)"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "confluent-kafka==2.15.1",
+    "faker==40.40.0",
+    "psycopg[binary]==3.3.6",
+    "python-dotenv==1.2.3",
+]
 
 [dependency-groups]
 dev = [
@@ -16,11 +21,12 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra"
