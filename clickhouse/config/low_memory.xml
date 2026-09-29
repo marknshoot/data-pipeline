@@ -1,0 +1,22 @@
+<!-- Tuned for a laptop: keep ClickHouse well under its 1.2 GB container limit. -->
+<clickhouse>
+    <max_server_memory_usage>1000000000</max_server_memory_usage>
+    <mark_cache_size>134217728</mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+    <index_mark_cache_size>0</index_mark_cache_size>
+    <concurrent_threads_soft_limit_num>2</concurrent_threads_soft_limit_num>
+    <logger>
+        <level>warning</level>
+    </logger>
+    <!-- Noisy system log tables are not needed locally. -->
+    <asynchronous_metric_log remove="1"/>
+    <metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <latency_log remove="1"/>
+    <profiles>
+        <default>
+            <max_threads>2</max_threads>
+        </default>
+    </profiles>
+</clickhouse>

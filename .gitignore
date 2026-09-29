@@ -1,0 +1,34 @@
+# Secrets and local config
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# dbt
+dbt/**/target/
+dbt/**/dbt_packages/
+dbt/**/logs/
+
+# Airflow
+airflow/logs/
+
+# Local data / volumes
+data/
+*.parquet
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

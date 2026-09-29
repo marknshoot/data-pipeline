@@ -1,0 +1,178 @@
+# ShopStream local stack. Services are grouped into profiles to fit a ~8 GB machine:
+#   core   : postgres, seaweedfs (S3 data lake), clickhouse (warehouse)
+#   stream : kafka (+ one-shot topic init)
+#   bi     : metabase
+# Airflow (profile "orch") is added in Phase 2 of PLAN.md.
+#
+# All image tags are pinned. Every service has a memory limit and a healthcheck.
+# Host ports bind to 127.0.0.1 only, so nothing is exposed to your LAN.
+
+name: data-pipeline
+
+x-defaults: &defaults
+  restart: unless-stopped
+  env_file: .env
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  # ---------------------------------------------------------------- core
+  postgres:
+    <<: *defaults
+    image: postgres:16.15
+    profiles: [core]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  seaweedfs:
+    <<: *defaults
+    image: chrislusf/seaweedfs:4.48
+    profiles: [core]
+    # Renders the S3 identity file from env, then runs master+volume+filer+s3 in one process.
+    entrypoint: ["/bin/sh", "/scripts/entrypoint.sh"]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    ports: ["127.0.0.1:${S3_PORT:-8333}:8333"]
+    volumes:
+      - seaweed_data:/data
+      - ./seaweedfs/entrypoint.sh:/scripts/entrypoint.sh:ro
+    mem_limit: 256m
+    healthcheck:
+      # S3 port open and filer answering => gateway can serve requests.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8333 && wget -q -O /dev/null http://127.0.0.1:8888/"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:4.48
+    profiles: [core]
+    restart: "no"
+    depends_on:
+      seaweedfs: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "s3.bucket.create -name ${S3_BUCKET}" | weed shell -master=seaweedfs:9333
+        echo "s3.bucket.list" | weed shell -master=seaweedfs:9333
+    mem_limit: 128m
+
+  clickhouse:
+    <<: *defaults
+    image: clickhouse/clickhouse-server:26.3.35.3
+    profiles: [core]
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "127.0.0.1:${CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ./clickhouse/config/low_memory.xml:/etc/clickhouse-server/config.d/low_memory.xml:ro
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    mem_limit: 1200m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8123/ping | grep -q Ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # -------------------------------------------------------------- stream
+  kafka:
+    <<: *defaults
+    image: apache/kafka:4.3.1
+    profiles: [stream]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-9094}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 72
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    ports: ["127.0.0.1:${KAFKA_PORT:-9094}:9094"]
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    profiles: [stream]
+    restart: "no"
+    depends_on:
+      kafka: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+          --topic ${KAFKA_TOPIC_EVENTS} --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic ${KAFKA_TOPIC_EVENTS}
+    environment:
+      KAFKA_HEAP_OPTS: -Xmx128m
+    mem_limit: 256m
+
+  # ------------------------------------------------------------------ bi
+  metabase:
+    <<: *defaults
+    image: metabase/metabase:v0.63.18.4
+    profiles: [bi]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      JAVA_OPTS: -Xmx768m
+    ports: ["127.0.0.1:${METABASE_PORT:-3000}:3000"]
+    mem_limit: 1200m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:3000/api/health | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      # First boot runs ~5 min of app-DB migrations on a laptop.
+      start_period: 420s
+
+volumes:
+  pg_data:
+  seaweed_data:
+  ch_data:
+  kafka_data:
