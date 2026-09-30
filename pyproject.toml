@@ -8,6 +8,8 @@ dependencies = [
     "boto3==1.43.104",
     "clickhouse-connect==1.9.0",
     "confluent-kafka==2.15.1",
+    "dbt-clickhouse==1.10.3",
+    "dbt-core==1.12.5",
     "faker==40.40.0",
     "psycopg[binary]==3.3.6",
     "pyarrow==25.0.1",

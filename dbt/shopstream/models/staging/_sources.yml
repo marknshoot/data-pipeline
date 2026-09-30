@@ -1,0 +1,38 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Raw OLTP rows landed in the lake by the hourly `oltp_extract` DAG and loaded
+      into ClickHouse by `warehouse.load_raw`. Tables are ReplacingMergeTree keyed by
+      the business key; models read them with FINAL to get one row per key.
+    schema: raw
+    loaded_at_field: updated_at
+    # Freshness is measured on `updated_at`, i.e. the last time the *business data*
+    # changed, not the last time the pipeline ran. Low-churn tables therefore need
+    # looser thresholds: a quiet sellers table is healthy, not broken. (A dedicated
+    # `_loaded_at` column would measure pipeline freshness directly; see Phase 7.)
+    freshness:
+      warn_after: { count: 48, period: hour }
+      error_after: { count: 96, period: hour }
+    tables:
+      - name: users
+        description: Marketplace customers.
+      - name: sellers
+        description: Merchants that list products (slow churn).
+        freshness:
+          warn_after: { count: 14, period: day }
+          error_after: { count: 45, period: day }
+      - name: categories
+        description: Product category tree (self-referencing, slow churn).
+        freshness:
+          warn_after: { count: 14, period: day }
+          error_after: { count: 45, period: day }
+      - name: products
+        description: Listings, including price and stock.
+      - name: orders
+        description: Order headers. `shipping_city` is a snapshot at order time.
+      - name: order_items
+        description: Order lines, with the unit price captured at purchase time.
+      - name: payments
+        description: Payment attempts for an order.

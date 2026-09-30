@@ -1,0 +1,25 @@
+name: shopstream
+version: "1.0.0"
+profile: shopstream
+
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+target-path: target
+clean-targets: ["target", "dbt_packages", "logs"]
+
+# Layers, and the ClickHouse database each lands in. generate_schema_name() maps a
+# custom schema straight to a database name (no <target>_<custom> prefix).
+models:
+  shopstream:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts

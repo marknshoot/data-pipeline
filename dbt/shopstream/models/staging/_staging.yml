@@ -1,0 +1,126 @@
+version: 2
+
+models:
+  - name: stg_users
+    description: One row per marketplace customer, newest version only.
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: email
+        data_tests: [not_null]
+      - name: city
+        data_tests: [not_null]
+
+  - name: stg_sellers
+    description: One row per merchant.
+    columns:
+      - name: seller_id
+        data_tests: [unique, not_null]
+      - name: email
+        data_tests: [unique, not_null]
+      - name: rating
+        data_tests: [not_null]
+
+  - name: stg_categories
+    description: Product category tree.
+    columns:
+      - name: category_id
+        data_tests: [unique, not_null]
+      - name: slug
+        data_tests: [unique, not_null]
+      - name: parent_category_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_categories')
+                field: category_id
+
+  - name: stg_products
+    description: Listings with price, cost and stock.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: sku
+        data_tests: [unique, not_null]
+      - name: seller_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_sellers')
+                field: seller_id
+      - name: category_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_categories')
+                field: category_id
+      - name: price
+        data_tests: [not_null]
+
+  - name: stg_orders
+    description: Order headers, one row per order.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_users')
+                field: user_id
+      - name: order_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [pending, paid, shipped, delivered, cancelled, refunded]
+      - name: total_amount
+        data_tests: [not_null]
+
+  - name: stg_order_items
+    description: Order lines with the purchase-time unit price.
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_products')
+                field: product_id
+      - name: quantity
+        data_tests: [not_null]
+
+  - name: stg_payments
+    description: Payment attempts per order.
+    columns:
+      - name: payment_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: payment_method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [card, bank_transfer, va, ewallet, cod]
+      - name: payment_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pending, authorized, captured, failed, refunded]

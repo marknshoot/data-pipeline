@@ -1,0 +1,18 @@
+# Local dbt profile. Credentials come from the environment (Makefile exports .env),
+# so nothing secret is committed. Run with:
+#   dbt ... --project-dir dbt/shopstream --profiles-dir dbt/shopstream
+shopstream:
+  target: dev
+  outputs:
+    dev:
+      type: clickhouse
+      # For ClickHouse, `schema` is the database the models are built into.
+      schema: "{{ env_var('CLICKHOUSE_DB', 'analytics') }}"
+      host: "{{ env_var('CLICKHOUSE_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('CLICKHOUSE_HTTP_PORT', '8123') | int }}"
+      user: "{{ env_var('CLICKHOUSE_USER') }}"
+      password: "{{ env_var('CLICKHOUSE_PASSWORD') }}"
+      secure: false
+      threads: 2
+      connect_timeout: 10
+      send_receive_timeout: 300

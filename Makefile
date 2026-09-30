@@ -9,7 +9,7 @@ export
 
 .DEFAULT_GOAL := help
 .PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
-	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw py shell
+	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw dbt dbt-build py shell
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -63,6 +63,18 @@ ch-schema: env ## Apply clickhouse/init/*.sql to a running ClickHouse (idempoten
 
 load-raw: env ## Load lake Parquet into ClickHouse raw tables (make load-raw ARGS="--truncate")
 	uv run python -m warehouse.load_raw $(ARGS)
+
+DBT_DIR := dbt/shopstream
+# dbt 1.12 moved --project-dir/--profiles-dir onto each subcommand; the env vars are
+# equivalent and apply uniformly.
+export DBT_PROJECT_DIR := $(DBT_DIR)
+export DBT_PROFILES_DIR := $(DBT_DIR)
+
+dbt: env ## Run dbt (make dbt ARGS="build")
+	uv run dbt $(ARGS)
+
+dbt-build: env ## dbt build (run + test everything)
+	uv run dbt build
 
 py: env ## Run Python with this project's .env (make py ARGS="-c 'print(1)'")
 	uv run python $(ARGS)

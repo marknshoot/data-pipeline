@@ -165,8 +165,8 @@ dateng/
 
 ### Phase 3: Warehouse and dbt (weeks 2–3). This is the most important phase.
 - [x] ClickHouse `raw` tables. Load from the lake with `INSERT ... SELECT FROM s3(...)`
-- [ ] dbt sources with freshness checks
-- [ ] Staging models (rename, cast, one model per source table)
+- [x] dbt sources with freshness checks
+- [x] Staging models (rename, cast, one model per source table)
 - [ ] Snapshots: `users`, `products` (SCD2)
 - [ ] Facts and dimensions (star schema), with incremental models for facts
 - [ ] Marts: GMV, funnel, cohort retention, seller performance

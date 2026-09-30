@@ -153,6 +153,31 @@ Design notes:
 Verified: raw row counts match Postgres one-for-one, and re-loading without
 `--truncate` doubles the physical row count while `FINAL` stays constant.
 
+### dbt transformations
+
+```bash
+make dbt ARGS="debug"                     # check the ClickHouse connection
+make dbt ARGS="build --select staging"
+make dbt ARGS="source freshness"
+make dbt-build                            # run + test everything
+```
+
+Layers map onto ClickHouse databases: `staging` (views) and `marts` (tables). A
+custom `generate_schema_name` macro makes `+schema: staging` land in the `staging`
+database instead of dbt's default `<target>_staging` — ClickHouse has no separate
+database/schema hierarchy.
+
+Staging is where duplicates are first resolved explicitly (`FINAL` over the
+ReplacingMergeTree), then text is trimmed/normalised, types are cast, and a few
+columns are derived: `gross_margin_ratio`, `line_amount`, `order_date`,
+`is_terminal`. The 44 data tests cover `unique`, `not_null`, `relationships` and
+`accepted_values`, plus a custom reconciliation test asserting that every order's
+stored total equals the sum of its order lines.
+
+Source freshness uses `updated_at`, which is the last time the *business data*
+changed rather than the last time the pipeline ran — so low-churn tables like
+`sellers` get looser thresholds (a quiet sellers table is healthy, not broken).
+
 ## Development
 
 ```bash
@@ -161,6 +186,8 @@ make seed         # seed reference data + history
 make seed-reset   # wipe and re-seed
 make extract      # incremental OLTP extract to the lake
 make lake-ls      # list lake objects (make lake-ls ARGS="raw/oltp")
+make load-raw     # lake -> ClickHouse raw tables
+make dbt-build    # dbt run + test
 make lint         # ruff + sqlfluff
 make test         # pytest
 make check        # lint + test
