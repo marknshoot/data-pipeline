@@ -51,10 +51,14 @@ def oltp_extract():
 
         summary = {
             "run_id": run_id,
-            "tables": {result.table: result.row_count for result in results},
-            "objects": {result.table: result.object_uri for result in results},
+            "rows": {result.table: result.row_count for result in results},
+            "written": {
+                result.table: result.object_uri
+                for result in results
+                if result.written and result.row_count > 0
+            },
         }
-        print(f"extracted {sum(summary['tables'].values()):,} rows for {run_id}")
+        print(f"extracted {sum(summary['rows'].values()):,} rows for {run_id}")
         return summary
 
     @task
@@ -66,14 +70,14 @@ def oltp_extract():
 
         filesystem = build_filesystem()
         missing = []
-        for table, uri in summary["objects"].items():
+        for table, uri in summary["written"].items():
             key = uri.removeprefix("s3://")
             if filesystem.get_file_info(key).type != FileType.File:
                 missing.append(table)
         if missing:
             raise FileNotFoundError(f"extract objects missing: {', '.join(missing)}")
-        total = sum(summary["tables"].values())
-        print(f"verified {len(summary['objects'])} objects, {total:,} rows")
+        total = sum(summary["rows"].values())
+        print(f"verified {len(summary['written'])} objects, {total:,} rows")
         return total
 
     verify(extract())

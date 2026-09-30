@@ -152,7 +152,29 @@ def test_backfill_is_idempotent(tmp_path) -> None:
         backfill()
         files_second, rows_second = _parquet_rows(tmp_path)
 
+        assert rows_first > 0
         assert files_first > 0
         assert (files_second, rows_second) == (files_first, rows_first)
+    finally:
+        conn.close()
+
+
+def test_empty_window_writes_no_object(tmp_path) -> None:
+    """An interval with no changes must not leave an empty Parquet file behind."""
+    conn = _connect_or_skip()
+    try:
+        results = run(
+            tables=("orders",),
+            start=datetime(2000, 1, 1, tzinfo=UTC),
+            end=datetime(2000, 1, 2, tzinfo=UTC),
+            run_id="empty-window",
+            bucket=str(tmp_path),
+            filesystem=LocalFileSystem(),
+            conn=conn,
+        )
+
+        assert results[0].row_count == 0
+        assert results[0].written is False
+        assert list(tmp_path.rglob("*.parquet")) == []
     finally:
         conn.close()

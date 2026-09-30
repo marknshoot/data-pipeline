@@ -74,6 +74,7 @@ class ExtractResult:
     object_uri: str
     window_start: datetime
     window_end: datetime
+    written: bool = True
 
 
 def arrow_type(data_type: str, precision: int | None, scale: int | None) -> pa.DataType:
@@ -162,16 +163,32 @@ def extract_table(
 
     arrow_table = build_table(rows, schema)
     key = lake.raw_oltp_key(table, lake.partition_date_for(end), run_id)
+    uri = f"s3://{bucket}/{key}"
+
     if dry_run:
         return ExtractResult(
             table=table,
             row_count=arrow_table.num_rows,
-            object_uri=f"s3://{bucket}/{key} (dry run)",
+            object_uri=f"{uri} (dry run)",
             window_start=start,
             window_end=end,
+            written=False,
         )
 
-    uri = lake.write_parquet(
+    if arrow_table.num_rows == 0:
+        # An empty interval carries no information, and ClickHouse's Parquet reader
+        # rejects row groups with zero rows. Skip the object; the run is still
+        # recorded in pipeline_meta.extract_run.
+        return ExtractResult(
+            table=table,
+            row_count=0,
+            object_uri=uri,
+            window_start=start,
+            window_end=end,
+            written=False,
+        )
+
+    lake.write_parquet(
         arrow_table, key, bucket=bucket, filesystem=filesystem or lake.build_filesystem(settings)
     )
     return ExtractResult(
@@ -180,6 +197,7 @@ def extract_table(
         object_uri=uri,
         window_start=start,
         window_end=end,
+        written=True,
     )
 
 

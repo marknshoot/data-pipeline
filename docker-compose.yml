@@ -52,11 +52,19 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
     AIRFLOW__LOGGING__LOGGING_LEVEL: WARNING
     POSTGRES_HOST: postgres
+    # Host runs use POSTGRES_PORT from .env (5433, to avoid clashing with other
+    # local projects); inside the compose network Postgres is always on 5432.
+    POSTGRES_PORT: "5432"
     KAFKA_BOOTSTRAP: kafka:9092
     S3_ENDPOINT: http://seaweedfs:8333
     PYTHONPATH: /opt/airflow/repo
   volumes:
-    - ./:/opt/airflow/repo:ro
+    # Mount only code, never the repo root: keeps .env (and any secret) out of the
+    # containers, so config comes solely from Compose `environment`.
+    - ./airflow/dags:/opt/airflow/repo/airflow/dags:ro
+    - ./generators:/opt/airflow/repo/generators:ro
+    - ./ingestion:/opt/airflow/repo/ingestion:ro
+    - ./warehouse:/opt/airflow/repo/warehouse:ro
     - airflow_logs:/opt/airflow/logs
   depends_on:
     postgres: { condition: service_healthy }

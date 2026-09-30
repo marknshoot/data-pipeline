@@ -164,7 +164,7 @@ dateng/
 - [x] Test: run a backfill for 3 past days twice and check row counts stay the same
 
 ### Phase 3: Warehouse and dbt (weeks 2–3). This is the most important phase.
-- [ ] ClickHouse `raw` tables. Load from the lake with `INSERT ... SELECT FROM s3(...)`
+- [x] ClickHouse `raw` tables. Load from the lake with `INSERT ... SELECT FROM s3(...)`
 - [ ] dbt sources with freshness checks
 - [ ] Staging models (rename, cast, one model per source table)
 - [ ] Snapshots: `users`, `products` (SCD2)

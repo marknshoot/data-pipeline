@@ -1,9 +1,15 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
+# Make this project's .env authoritative over the ambient shell. Another project may
+# export POSTGRES_* etc., which would otherwise silently override our config when
+# Compose interpolates ${...} at `up` time.
+-include .env
+export
+
 .DEFAULT_GOAL := help
 .PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
-	schema seed seed-reset gen-orders gen-events extract lake-ls
+	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw py shell
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -48,6 +54,21 @@ extract: env ## Incremental OLTP extract to the lake (make extract ARGS="--table
 
 lake-ls: env ## List objects in the lake (make lake-ls ARGS="raw/oltp/orders")
 	uv run python -m ingestion.lake $(ARGS)
+
+ch-schema: env ## Apply clickhouse/init/*.sql to a running ClickHouse (idempotent)
+	@for f in clickhouse/init/0[1-9]_*.sql; do \
+		echo "applying $$f"; \
+		docker compose --profile core exec -T clickhouse clickhouse-client --multiquery < $$f || exit 1; \
+	done
+
+load-raw: env ## Load lake Parquet into ClickHouse raw tables (make load-raw ARGS="--truncate")
+	uv run python -m warehouse.load_raw $(ARGS)
+
+py: env ## Run Python with this project's .env (make py ARGS="-c 'print(1)'")
+	uv run python $(ARGS)
+
+shell: env ## Interactive shell with this project's .env exported
+	@exec bash
 
 up: up-core up-stream ## Start core + stream
 

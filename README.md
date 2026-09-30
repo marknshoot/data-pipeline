@@ -4,7 +4,7 @@ A self-hosted, end-to-end data engineering project for a simulated Southeast Asi
 Batch extracts from the app database and a live Kafka clickstream flow into an S3-compatible data lake.
 Spark cleans the data, dbt models it in ClickHouse, Airflow schedules the pipeline, and Metabase shows the dashboards.
 
-> Status: **Phase 2 (lake + batch ingestion)**. See [PLAN.md](PLAN.md) for the full roadmap and checklist.
+> Status: **Phase 3 (warehouse)** — in progress. See [PLAN.md](PLAN.md) for the full roadmap and checklist.
 
 ## Stack
 
@@ -125,6 +125,34 @@ containers (all are set in `docker-compose.yml`):
   a local deployment and the API is bound to `127.0.0.1` only. Switch to a real auth
   manager before exposing this anywhere.
 
+## Warehouse (ClickHouse)
+
+`make ch-schema` creates one `raw.<table>` per OLTP source table. `make load-raw`
+fills them by reading the lake Parquet directly with ClickHouse's `s3()` table
+function — no data passes through Python.
+
+```bash
+make ch-schema                    # create raw tables (idempotent)
+make load-raw ARGS="--truncate"   # lake -> ClickHouse, clean reload
+make load-raw                     # append; dedup handles repeats
+```
+
+Design notes:
+
+* Raw tables are `ReplacingMergeTree(updated_at)` keyed by the business key. A row
+  updated after its extract interval lands in several lake files, so repeated loads
+  converge to one row per key with the newest `updated_at`. Merges are asynchronous,
+  so exact queries use `FINAL` (dbt staging applies the same rule explicitly).
+* `s3()` credentials are passed as server-side query parameters rather than
+  interpolated into SQL, keeping them out of `system.query_log`.
+* Intervals with no changes write no Parquet object: ClickHouse's Parquet reader
+  rejects row groups with zero rows, and an empty file carries no information.
+* ClickHouse reads the lake over the compose network, so it uses
+  `S3_ENDPOINT_INTERNAL` (`http://seaweedfs:8333`) instead of the host endpoint.
+
+Verified: raw row counts match Postgres one-for-one, and re-loading without
+`--truncate` doubles the physical row count while `FINAL` stays constant.
+
 ## Development
 
 ```bash
@@ -137,3 +165,12 @@ make lint         # ruff + sqlfluff
 make test         # pytest
 make check        # lint + test
 ```
+
+### Configuration precedence
+
+The Makefile exports `.env`, and the Python entry points load it with
+`override=True`, so this project's `.env` always wins over variables exported in
+your shell — other projects on a dev machine commonly export `POSTGRES_*` and would
+otherwise silently hijack the connection. Compose services receive their
+overrides from `docker-compose.yml` instead, and `.env` is never mounted into a
+container, so no secret is copied in and container config cannot drift.
