@@ -3,6 +3,9 @@
 *.pem
 *.key
 
+# Personal working notes (roadmap, RAM budget, application notes): kept local only
+PLAN.md
+
 # Python
 __pycache__/
 *.py[cod]

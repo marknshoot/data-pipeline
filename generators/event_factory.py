@@ -4,7 +4,7 @@ No Kafka, no disk: given a seeded ``random.Random`` the output is reproducible, 
 the messy-data guarantees (duplicates, late events, schema v2, malformed records)
 can be unit-tested directly.
 
-Messiness is injected on purpose, matching PLAN.md section 3:
+Messiness is injected on purpose, matching the documented data design:
   * ~2% of records are exact duplicates (same ``event_id``, delivered twice)
   * ~3% of events are late (``event_time`` up to 2h before send time)
   * from ``schema_v2_start`` onward: adds ``platform_version``, renames

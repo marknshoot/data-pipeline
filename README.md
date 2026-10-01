@@ -327,7 +327,7 @@ metabase/          dashboard definitions + reproducible provisioning
 postgres/init/     source schema + pipeline metadata
 scripts/           screenshot capture
 tests/             pytest suite
-PLAN.md            the full roadmap and checklist I work against
+docs/img/          screenshots referenced by this README
 ```
 
 ## Roadmap

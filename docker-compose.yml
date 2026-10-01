@@ -2,7 +2,7 @@
 #   core   : postgres, seaweedfs (S3 data lake), clickhouse (warehouse)
 #   stream : kafka (+ one-shot topic init)
 #   bi     : metabase
-# Airflow (profile "orch") is added in Phase 2 of PLAN.md.
+# Airflow (profile "orch") runs the extract and warehouse DAGs.
 #
 # All image tags are pinned. Every service has a memory limit and a healthcheck.
 # Host ports bind to 127.0.0.1 only, so nothing is exposed to your LAN.
