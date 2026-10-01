@@ -218,6 +218,41 @@ and produced 108 orders pointing at user 0 until it was set to `1` in `profiles.
 `assert_no_prefixed_column_names.sql` fails the build if one slips through.
 * `formatDateTime` uses MySQL-style specifiers (`%M`/`%W`), not `%B`/`%A`.
 
+## Dashboards (Metabase)
+
+Metabase runs with the official ClickHouse driver baked into a small image (the
+jar is pinned by release tag *and* sha256 in `metabase/Dockerfile`, so a changed
+upstream artefact fails the build).
+
+```bash
+make up-bi              # start Metabase (needs core)
+make metabase-setup     # admin user, ClickHouse connection, dashboards
+```
+
+The whole BI layer is **provisioned from code** (`metabase/provision.py` +
+`metabase/dashboards.py`): it creates the read-only ClickHouse user, completes
+Metabase's first-run setup, registers the connection, then creates or updates a
+collection, 13 questions and 2 dashboards. It is re-runnable — everything is
+looked up by name — so a fresh clone reproduces the dashboards instead of relying
+on hand-clicked UI state.
+
+| Dashboard | Questions |
+|---|---|
+| Marketplace Overview | total GMV, orders, AOV, active buyers, GMV by day, orders/buyers by day, top categories, top sellers, revenue by payment method |
+| Customer | cohort retention (pivot), new customers per cohort, repeat purchase rate, revenue by shipping city |
+
+The acquisition funnel panel is intentionally absent until clickstream events
+reach the warehouse in Phase 5.
+
+Two ClickHouse/Metabase details worth knowing:
+
+* The read-only user is created with `readonly = 2`, not `1`. `readonly=1` forbids
+  changing *settings*, and the ClickHouse driver sets session options
+  (`async_insert`) on connect — so `1` breaks the connection outright while still
+  providing no data-modification rights either way.
+* `MB_LOAD_SAMPLE_CONTENT=false`, so the demo "Sample Database" and its example
+  dashboards never appear.
+
 ## Development
 
 ```bash
@@ -228,6 +263,7 @@ make extract      # incremental OLTP extract to the lake
 make lake-ls      # list lake objects (make lake-ls ARGS="raw/oltp")
 make load-raw     # lake -> ClickHouse raw tables
 make dbt-build    # dbt run + test
+make metabase-setup  # provision Metabase dashboards from code
 make lint         # ruff + sqlfluff
 make test         # pytest
 make check        # lint + test

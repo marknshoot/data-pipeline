@@ -180,11 +180,12 @@ dateng/
 - [x] DAG `warehouse_build`: load → `dbt build`, triggered when the extract finishes (Airflow assets)
 
 ### Phase 4: Dashboard. Minimum viable product at the end of this phase (week 3)
-- [ ] Metabase connected to ClickHouse with a read-only user
-- [ ] Dashboard "Marketplace Overview": GMV trend, orders, AOV, top categories, top sellers
-- [ ] Dashboard "Customer": funnel, cohort retention heatmap, city breakdown
-- [ ] Setup reproducible from a script or exported dashboard
-- [ ] Checkpoint: this is already a complete batch project. Commit, and write the first version of the README.
+- [x] Metabase connected to ClickHouse with a read-only user (`readonly = 2`)
+- [x] Dashboard "Marketplace Overview": GMV trend, orders, AOV, top categories, top sellers
+- [~] Dashboard "Customer": cohort retention heatmap, city breakdown done; funnel
+      panel deferred to Phase 5 with `mart_funnel_daily` (needs clickstream events)
+- [x] Setup reproducible from a script (`metabase/provision.py` creates the connection, 13 questions and 2 dashboards; re-runnable)
+- [x] Checkpoint: this is already a complete batch project. Commit, and write the first version of the README.
 
 ### Phase 5: Streaming (week 4)
 - [ ] Kafka topic `clickstream.events` (6 partitions, keyed by `user_id`)

@@ -49,10 +49,18 @@ class Settings:
     s3_bucket: str
     s3_region: str
     clickhouse_host: str
+    clickhouse_host_internal: str
     clickhouse_http_port: int
     clickhouse_user: str
     clickhouse_password: str
     clickhouse_db: str
+    clickhouse_ro_user: str
+    clickhouse_ro_password: str
+    metabase_url: str
+    metabase_admin_email: str
+    metabase_admin_password: str
+    metabase_admin_first_name: str
+    metabase_admin_last_name: str
 
 
 @lru_cache(maxsize=1)
@@ -79,8 +87,16 @@ def get_settings() -> Settings:
         s3_bucket=os.environ.get("S3_BUCKET", "lake"),
         s3_region=os.environ.get("S3_REGION", "us-east-1"),
         clickhouse_host=os.environ.get("CLICKHOUSE_HOST", "127.0.0.1"),
+        clickhouse_host_internal=os.environ.get("CLICKHOUSE_HOST_INTERNAL", "clickhouse"),
         clickhouse_http_port=int(os.environ.get("CLICKHOUSE_HTTP_PORT", "8123")),
         clickhouse_user=_require("CLICKHOUSE_USER"),
         clickhouse_password=_require("CLICKHOUSE_PASSWORD"),
         clickhouse_db=os.environ.get("CLICKHOUSE_DB", "analytics"),
+        clickhouse_ro_user=os.environ.get("CLICKHOUSE_RO_USER", "metabase"),
+        clickhouse_ro_password=_require("CLICKHOUSE_RO_PASSWORD"),
+        metabase_url=os.environ.get("METABASE_URL", "http://localhost:3000"),
+        metabase_admin_email=os.environ.get("METABASE_ADMIN_EMAIL", "admin@example.com"),
+        metabase_admin_password=_require("METABASE_ADMIN_PASSWORD"),
+        metabase_admin_first_name=os.environ.get("METABASE_ADMIN_FIRST_NAME", "Shop"),
+        metabase_admin_last_name=os.environ.get("METABASE_ADMIN_LAST_NAME", "Stream"),
     )
