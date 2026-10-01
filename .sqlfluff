@@ -1,5 +1,6 @@
 [sqlfluff]
 dialect = clickhouse
+# `raw` templater: these files are plain DDL, not dbt/Jinja.
 templater = raw
 max_line_length = 120
 exclude_rules = LT05
@@ -9,3 +10,16 @@ tab_space_size = 4
 
 [sqlfluff:rules:capitalisation.keywords]
 capitalisation_policy = upper
+
+# ClickHouse is case-insensitive but its types and engines are conventionally
+# PascalCase (Int64, DateTime64, ReplacingMergeTree). Require PascalCase rather
+# than forcing SQL-style upper case, which would be unidiomatic here.
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = pascal
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = pascal
+
+# `name` and `method` are real, unavoidable column names in this schema.
+[sqlfluff:rules:references.keywords]
+ignore_words = name, method

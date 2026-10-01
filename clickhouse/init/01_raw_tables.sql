@@ -11,12 +11,12 @@
 
 CREATE TABLE IF NOT EXISTS raw.sellers
 (
-    seller_id  Int64,
-    name       String,
-    email      String,
-    city       String,
-    country    String,
-    rating     Decimal(3, 2),
+    seller_id Int64,
+    name String,
+    email String,
+    city String,
+    country String,
+    rating Decimal(3, 2),
     created_at DateTime64(6, 'UTC'),
     updated_at DateTime64(6, 'UTC')
 )
@@ -25,24 +25,24 @@ ORDER BY seller_id;
 
 CREATE TABLE IF NOT EXISTS raw.categories
 (
-    category_id        Int32,
-    name               String,
-    slug               String,
+    category_id Int32,
+    name String,
+    slug String,
     parent_category_id Nullable(Int32),
-    created_at         DateTime64(6, 'UTC'),
-    updated_at         DateTime64(6, 'UTC')
+    created_at DateTime64(6, 'UTC'),
+    updated_at DateTime64(6, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY category_id;
 
 CREATE TABLE IF NOT EXISTS raw.users
 (
-    user_id    Int64,
-    email      String,
-    full_name  String,
-    phone      Nullable(String),
-    city       String,
-    country    String,
+    user_id Int64,
+    email String,
+    full_name String,
+    phone Nullable(String),
+    city String,
+    country String,
     created_at DateTime64(6, 'UTC'),
     updated_at DateTime64(6, 'UTC')
 )
@@ -51,31 +51,31 @@ ORDER BY user_id;
 
 CREATE TABLE IF NOT EXISTS raw.products
 (
-    product_id  Int64,
-    seller_id   Int64,
+    product_id Int64,
+    seller_id Int64,
     category_id Int32,
-    name        String,
-    sku         String,
-    price       Decimal(14, 2),
-    cost        Decimal(14, 2),
-    stock       Int32,
-    is_active   Bool,
-    created_at  DateTime64(6, 'UTC'),
-    updated_at  DateTime64(6, 'UTC')
+    name String,
+    sku String,
+    price Decimal(14, 2),
+    cost Decimal(14, 2),
+    stock Int32,
+    is_active Bool,
+    created_at DateTime64(6, 'UTC'),
+    updated_at DateTime64(6, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY product_id;
 
 CREATE TABLE IF NOT EXISTS raw.orders
 (
-    order_id      Int64,
-    user_id       Int64,
-    status        String,
-    currency      String,
+    order_id Int64,
+    user_id Int64,
+    status String,
+    currency String,
     shipping_city String,
-    total_amount  Decimal(14, 2),
-    created_at    DateTime64(6, 'UTC'),
-    updated_at    DateTime64(6, 'UTC')
+    total_amount Decimal(14, 2),
+    created_at DateTime64(6, 'UTC'),
+    updated_at DateTime64(6, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY order_id;
@@ -83,12 +83,12 @@ ORDER BY order_id;
 CREATE TABLE IF NOT EXISTS raw.order_items
 (
     order_item_id Int64,
-    order_id      Int64,
-    product_id    Int64,
-    quantity      Int32,
-    unit_price    Decimal(14, 2),
-    created_at    DateTime64(6, 'UTC'),
-    updated_at    DateTime64(6, 'UTC')
+    order_id Int64,
+    product_id Int64,
+    quantity Int32,
+    unit_price Decimal(14, 2),
+    created_at DateTime64(6, 'UTC'),
+    updated_at DateTime64(6, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY order_item_id;
@@ -96,10 +96,10 @@ ORDER BY order_item_id;
 CREATE TABLE IF NOT EXISTS raw.payments
 (
     payment_id Int64,
-    order_id   Int64,
-    method     String,
-    amount     Decimal(14, 2),
-    status     String,
+    order_id Int64,
+    method String,
+    amount Decimal(14, 2),
+    status String,
     created_at DateTime64(6, 'UTC'),
     updated_at DateTime64(6, 'UTC')
 )
