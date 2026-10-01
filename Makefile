@@ -10,7 +10,7 @@ export
 .DEFAULT_GOAL := help
 .PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
 	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw dbt dbt-build \
-	metabase-setup py shell
+	metabase-setup screenshots py shell
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -34,6 +34,9 @@ up-bi: env ## Start metabase (needs core)
 
 metabase-setup: env ## Provision Metabase: admin, ClickHouse connection, dashboards
 	uv run python -m metabase.provision
+
+screenshots: env ## Capture UI screenshots into docs/img (needs up-bi + up-orch)
+	uv run --with playwright==1.63.0 python -m scripts.capture_screenshots
 
 schema: env ## Apply the OLTP schema + pipeline metadata to a running Postgres
 	@for f in postgres/init/0[1-9]_*.sql; do \

@@ -115,13 +115,34 @@ DASHBOARDS: list[dict] = [
         "cards": [
             {
                 "name": "Cohort retention",
-                "display": "pivot",
+                # NOTE: Metabase only allows the 'pivot' display for questions built in
+                # the query builder, not native SQL, so this is a grouped bar chart of
+                # retention decay per cohort. The raw triangle is the table below.
+                "display": "bar",
+                "visualization_settings": {
+                    "graph.dimensions": ["month_number", "cohort_month"],
+                    "graph.metrics": ["retention_rate"],
+                },
                 "sql": (
-                    "select cohort_month, month_number, retention_rate\n"
+                    "select month_number, cohort_month, retention_rate\n"
                     "from marts.mart_cohort_retention\n"
                     "order by cohort_month, month_number"
                 ),
-                "size": {"col": 0, "row": 0, "size_x": 24, "size_y": 9},
+                "size": {"col": 0, "row": 0, "size_x": 12, "size_y": 9},
+            },
+            {
+                "name": "Cohort retention (table)",
+                "display": "table",
+                "sql": (
+                    "select\n"
+                    "    cohort_month,\n"
+                    "    month_number,\n"
+                    "    active_users,\n"
+                    "    retention_rate\n"
+                    "from marts.mart_cohort_retention\n"
+                    "order by cohort_month, month_number"
+                ),
+                "size": {"col": 12, "row": 0, "size_x": 12, "size_y": 9},
             },
             {
                 "name": "New customers per cohort",

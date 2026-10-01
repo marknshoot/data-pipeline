@@ -217,8 +217,9 @@ dateng/
 
 ### Phase 9: Presentation (week 6–7)
 - [ ] `make demo`: fresh clone → running dashboard in under 10 minutes
-- [ ] README: problem, architecture diagram, stack and *why* each tool, data model diagram, how to run, design decisions, results and metrics, limitations and future work
-- [ ] Screenshots: Airflow DAGs, dbt lineage, Kafka and consumer logs, dashboards
+- [~] README: problem, architecture diagram, stack and *why* each tool, data model diagram, how to run, design decisions, results and metrics, limitations and future work
+      — rewritten and pushed; the roadmap section is honest about what is not built yet
+- [~] Screenshots: Metabase dashboards + Airflow DAG graphs captured and committed (`docs/img/`, reproducible via `make screenshots`); dbt lineage graph and consumer logs still to add
 - [ ] 2–3 minute demo video (linked at the top of the README)
 - [ ] Résumé bullets with real numbers (see below)
 - [ ] Pin the repo on GitHub and add it to LinkedIn
