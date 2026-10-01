@@ -178,6 +178,46 @@ Source freshness uses `updated_at`, which is the last time the *business data*
 changed rather than the last time the pipeline ran — so low-churn tables like
 `sellers` get looser thresholds (a quiet sellers table is healthy, not broken).
 
+### Star schema
+
+| Layer | Models |
+|---|---|
+| Staging (views) | `stg_users`, `stg_sellers`, `stg_categories`, `stg_products`, `stg_orders`, `stg_order_items`, `stg_payments` |
+| Dimensions | `dim_users` (SCD2), `dim_products` (SCD2), `dim_sellers` (SCD1), `dim_categories`, `dim_date` |
+| Facts (incremental) | `fct_orders`, `fct_order_items`, `fct_payments` |
+| Marts | `mart_daily_gmv`, `mart_cohort_retention`, `mart_seller_performance` |
+
+SCD2 history for `users` and `products` comes from dbt snapshots. The raw layer
+keeps only the newest version of a row (ReplacingMergeTree), so history is built
+forward from the first snapshot run — older versions cannot be reconstructed.
+Point-in-time correctness does not depend on that: `orders.shipping_city` and
+`order_items.unit_price` are already snapshots taken at transaction time, and
+`fct_orders.user_sk` uses an as-of join onto `dim_users` with a fallback to the
+current version when an order predates every tracked version.
+
+Facts are incremental with `delete+insert` on the business key and a one-day
+lookback, so a late change is picked up without duplicating rows (re-running
+`dbt build` leaves row counts unchanged).
+
+The funnel mart is deliberately absent: it needs the clickstream, which reaches the
+warehouse in Phase 5.
+
+### Orchestration
+
+`warehouse_build` is scheduled on the **asset** `s3://lake/raw/oltp` rather than on
+a clock, so it fires the moment `oltp_extract` lands new Parquet: `load_raw`
+(lake → ClickHouse) followed by `dbt build` (snapshots + models + 96 tests).
+
+### ClickHouse lessons baked into the models
+
+* `join_use_nulls` defaults to `0`, so an unmatched `LEFT JOIN` returns the type's
+default (`0`) rather than `NULL` — which silently breaks `coalesce(right, fallback)`
+and produced 108 orders pointing at user 0 until it was set to `1` in `profiles.yml`.
+* An un-aliased `alias.column` in a join becomes a column literally named
+`o.user_id`. Every mart column is explicitly aliased, and
+`assert_no_prefixed_column_names.sql` fails the build if one slips through.
+* `formatDateTime` uses MySQL-style specifiers (`%M`/`%W`), not `%B`/`%A`.
+
 ## Development
 
 ```bash

@@ -167,12 +167,17 @@ dateng/
 - [x] ClickHouse `raw` tables. Load from the lake with `INSERT ... SELECT FROM s3(...)`
 - [x] dbt sources with freshness checks
 - [x] Staging models (rename, cast, one model per source table)
-- [ ] Snapshots: `users`, `products` (SCD2)
-- [ ] Facts and dimensions (star schema), with incremental models for facts
-- [ ] Marts: GMV, funnel, cohort retention, seller performance
-- [ ] Tests: unique, not_null, relationships, accepted_values, plus custom checks (e.g. order total = sum of items)
-- [ ] `dbt docs generate`, with a screenshot of the lineage graph
-- [ ] DAG `warehouse_build`: load → `dbt build`, triggered when the extract finishes (Airflow assets)
+- [x] Snapshots: `users`, `products` (SCD2)
+- [x] Facts and dimensions (star schema), with incremental models for facts
+- [~] Marts: GMV, funnel, cohort retention, seller performance
+      — GMV, cohort retention and seller performance are built; `mart_funnel_daily`
+        moves to Phase 5 because it needs the clickstream (events reach the
+        warehouse only after the Kafka → lake → ClickHouse path exists)
+- [x] Tests: unique, not_null, relationships, accepted_values, plus custom checks
+      (order total = sum of items, cross-fact revenue reconciliation, SCD2
+      one-current-version, cohort grain/bounds, no prefixed column names)
+- [x] `dbt docs generate` (screenshot of the lineage graph still to take in Phase 9)
+- [x] DAG `warehouse_build`: load → `dbt build`, triggered when the extract finishes (Airflow assets)
 
 ### Phase 4: Dashboard. Minimum viable product at the end of this phase (week 3)
 - [ ] Metabase connected to ClickHouse with a read-only user
@@ -186,6 +191,7 @@ dateng/
 - [ ] `lake_consumer.py`: consumer group, writes a micro-batch every N seconds or M records, commits offsets *after* the S3 write succeeds (at-least-once delivery)
 - [ ] Malformed records → dead-letter location, with a count metric
 - [ ] ClickHouse Kafka engine table → `rt_orders_per_minute` materialized view
+- [ ] `fct_events` + `mart_funnel_daily` (moved here from Phase 3; needs the clickstream in the warehouse)
 - [ ] "Live" Metabase panel with auto-refresh
 - [ ] Test: kill the consumer while it's running, restart it, and confirm no events are lost (duplicates are fine and get removed later)
 

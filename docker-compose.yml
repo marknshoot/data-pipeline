@@ -50,14 +50,22 @@ x-airflow-common: &airflow-common
     # Enable real intervals so an hourly run means (start_of_hour, end_of_hour].
     AIRFLOW__SCHEDULER__CREATE_CRON_DATA_INTERVALS: "true"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
-    AIRFLOW__LOGGING__LOGGING_LEVEL: WARNING
+    # INFO (not WARNING): task print() output and dbt's stdout must be visible in the UI.
+    AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
     POSTGRES_HOST: postgres
     # Host runs use POSTGRES_PORT from .env (5433, to avoid clashing with other
     # local projects); inside the compose network Postgres is always on 5432.
     POSTGRES_PORT: "5432"
     KAFKA_BOOTSTRAP: kafka:9092
     S3_ENDPOINT: http://seaweedfs:8333
+    # ClickHouse runs as its own compose service, not on the task's localhost.
+    CLICKHOUSE_HOST: clickhouse
     PYTHONPATH: /opt/airflow/repo
+    # dbt artefacts go to the container's writable space so the repo stays read-only.
+    DBT_PROJECT_DIR: /opt/airflow/repo/dbt/shopstream
+    DBT_PROFILES_DIR: /opt/airflow/repo/dbt/shopstream
+    DBT_TARGET_PATH: /tmp/dbt/target
+    DBT_LOG_PATH: /tmp/dbt/logs
   volumes:
     # Mount only code, never the repo root: keeps .env (and any secret) out of the
     # containers, so config comes solely from Compose `environment`.
@@ -65,6 +73,7 @@ x-airflow-common: &airflow-common
     - ./generators:/opt/airflow/repo/generators:ro
     - ./ingestion:/opt/airflow/repo/ingestion:ro
     - ./warehouse:/opt/airflow/repo/warehouse:ro
+    - ./dbt:/opt/airflow/repo/dbt:ro
     - airflow_logs:/opt/airflow/logs
   depends_on:
     postgres: { condition: service_healthy }

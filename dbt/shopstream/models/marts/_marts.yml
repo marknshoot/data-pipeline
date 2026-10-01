@@ -1,0 +1,136 @@
+version: 2
+
+models:
+  - name: dim_users
+    description: SCD2 customer dimension; one row per tracked version.
+    columns:
+      - name: user_sk
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+
+  - name: dim_products
+    description: SCD2 product dimension; one row per tracked version.
+    columns:
+      - name: product_sk
+        data_tests: [unique, not_null]
+      - name: product_id
+        data_tests: [not_null]
+      - name: price
+        data_tests: [not_null]
+
+  - name: dim_sellers
+    description: SCD1 seller dimension.
+    columns:
+      - name: seller_sk
+        data_tests: [unique, not_null]
+      - name: seller_id
+        data_tests: [unique, not_null]
+
+  - name: dim_categories
+    description: Category dimension flattened to include the parent name.
+    columns:
+      - name: category_sk
+        data_tests: [unique, not_null]
+      - name: category_id
+        data_tests: [unique, not_null]
+      - name: parent_category_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_categories')
+                field: category_id
+
+  - name: dim_date
+    description: Calendar dimension over the order history range.
+    columns:
+      - name: date_key
+        data_tests: [unique, not_null]
+
+  - name: fct_orders
+    description: Order-grain fact with the customer version at order time.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_users')
+                field: user_id
+      - name: user_sk
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_users')
+                field: user_sk
+      - name: order_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pending, paid, shipped, delivered, cancelled, refunded]
+      - name: total_amount
+        data_tests: [not_null]
+
+  - name: fct_order_items
+    description: Order-line grain fact, including seller and category.
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_orders')
+                field: order_id
+      - name: product_id
+        data_tests: [not_null]
+      - name: line_amount
+        data_tests: [not_null]
+
+  - name: fct_payments
+    description: Payment-grain fact.
+    columns:
+      - name: payment_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_orders')
+                field: order_id
+      - name: payment_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pending, authorized, captured, failed, refunded]
+
+  - name: mart_daily_gmv
+    description: Daily orders, GMV and AOV for revenue-generating orders.
+    columns:
+      - name: date_key
+        data_tests: [unique, not_null]
+      - name: gmv
+        data_tests: [not_null]
+
+  - name: mart_cohort_retention
+    description: Monthly cohort retention by months since first order.
+    columns:
+      - name: cohort_month
+        data_tests: [not_null]
+      - name: retention_rate
+        data_tests: [not_null]
+
+  - name: mart_seller_performance
+    description: Per-seller revenue, units and catalogue breadth.
+    columns:
+      - name: seller_id
+        data_tests: [unique, not_null]
+      - name: revenue
+        data_tests: [not_null]

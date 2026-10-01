@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from airflow.sdk import dag, task
+from shopstream_assets import RAW_OLTP
 
 DEFAULT_ARGS = {
     "retries": 2,
@@ -31,18 +32,28 @@ DEFAULT_ARGS = {
     tags=["phase2", "ingestion", "batch"],
 )
 def oltp_extract():
-    @task
-    def extract(data_interval_start: datetime, data_interval_end: datetime) -> dict:
+    @task(outlets=[RAW_OLTP])
+    def extract(
+        data_interval_start: datetime | None = None,
+        data_interval_end: datetime | None = None,
+    ) -> dict:
+        # Scheduled runs get a real interval from the timetable. A manual trigger
+        # (`airflow dags trigger`) has no interval, so fall back to the last hour.
+        from datetime import UTC, timedelta
+
+        end = data_interval_end or datetime.now(UTC)
+        start = data_interval_start or (end - timedelta(hours=1))
+
         # Imported lazily so DAG parsing does not need boto3/pyarrow.
         from generators import db
         from ingestion.oltp_extract import default_run_id, run
 
-        run_id = default_run_id(data_interval_start, data_interval_end)
+        run_id = default_run_id(start, end)
         conn = db.connect()
         try:
             results = run(
-                start=data_interval_start,
-                end=data_interval_end,
+                start=start,
+                end=end,
                 run_id=run_id,
                 conn=conn,
             )

@@ -16,3 +16,8 @@ shopstream:
       threads: 2
       connect_timeout: 10
       send_receive_timeout: 300
+      # ClickHouse defaults join_use_nulls=0, which turns an unmatched LEFT JOIN
+      # column into the type's default (0) rather than NULL. That silently breaks
+      # `coalesce(right_side, fallback)` patterns. Use standard SQL NULL semantics.
+      custom_settings:
+        join_use_nulls: 1
