@@ -38,6 +38,15 @@ def _expand_to_content(page: Page, max_height: int = 4000) -> None:
     """
     height = page.evaluate(
         """() => {
+            // Prefer real content: the bottom edge of the last dashcard. Metabase
+            // reserves grid rows and has containers much taller than the cards, so
+            // a naive max(scrollHeight) leaves a wide empty band under the dashboard.
+            let bottom = 0;
+            for (const el of document.querySelectorAll('[data-testid="dashcard"]')) {
+                const rect = el.getBoundingClientRect();
+                bottom = Math.max(bottom, rect.bottom + window.scrollY);
+            }
+            if (bottom > 0) return bottom;
             let max = document.body.scrollHeight;
             for (const el of document.querySelectorAll('*')) {
                 if (el.scrollHeight > max) max = el.scrollHeight;

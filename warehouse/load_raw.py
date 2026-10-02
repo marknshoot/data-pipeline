@@ -96,6 +96,38 @@ RAW_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Clickstream events are written by streaming/lake_consumer.py, not the OLTP
+# extractor, so they live under a different lake prefix. Column order matches
+# streaming.lake_consumer.EVENT_SCHEMA and clickhouse/init/02_events.sql.
+EVENTS_TABLE = "events"
+EVENTS_PREFIX = "raw/events"
+EVENTS_COLUMNS: tuple[str, ...] = (
+    "event_id",
+    "schema_version",
+    "event_type",
+    "user_id",
+    "session_id",
+    "product_id",
+    "event_time",
+    "city",
+    "device",
+    "device_type",
+    "platform_version",
+    "consumed_at",
+)
+
+# Every table the raw layer knows how to load (OLTP tables first, then events).
+ALL_TABLES: tuple[str, ...] = (*RAW_COLUMNS, EVENTS_TABLE)
+
+
+def columns_for(table: str) -> tuple[str, ...]:
+    return EVENTS_COLUMNS if table == EVENTS_TABLE else RAW_COLUMNS[table]
+
+
+def prefix_for(table: str) -> str:
+    """Lake prefix for a raw table (events are not under raw/oltp/)."""
+    return EVENTS_PREFIX if table == EVENTS_TABLE else f"raw/oltp/{table}"
+
 
 @dataclass(frozen=True)
 class LoadResult:
@@ -105,10 +137,10 @@ class LoadResult:
     reason: str = ""
 
 
-def lake_glob(table: str, settings: Settings) -> str:
+def lake_glob(prefix: str, settings: Settings) -> str:
     """URL ClickHouse's s3() uses: it must be the in-network endpoint, not localhost."""
     base = settings.s3_endpoint_internal.rstrip("/")
-    return f"{base}/{settings.s3_bucket}/raw/oltp/{table}/**/*.parquet"
+    return f"{base}/{settings.s3_bucket}/{prefix}/**/*.parquet"
 
 
 def row_count(client: Client, table: str) -> int:
@@ -123,8 +155,9 @@ def load_table(
     *,
     truncate: bool = False,
 ) -> LoadResult:
-    columns = RAW_COLUMNS[table]
-    if not lake.list_keys(f"raw/oltp/{table}", bucket=settings.s3_bucket):
+    columns = columns_for(table)
+    prefix = prefix_for(table)
+    if not lake.list_keys(prefix, bucket=settings.s3_bucket):
         return LoadResult(table, 0, skipped=True, reason="no objects in the lake")
 
     if truncate:
@@ -139,7 +172,7 @@ def load_table(
     client.command(
         sql,
         parameters={
-            "url": lake_glob(table, settings),
+            "url": lake_glob(prefix, settings),
             "key": settings.s3_access_key,
             "secret": settings.s3_secret_key,
         },
@@ -149,7 +182,7 @@ def load_table(
 
 def load_all(
     *,
-    tables: tuple[str, ...] = tuple(RAW_COLUMNS),
+    tables: tuple[str, ...] = ALL_TABLES,
     truncate: bool = False,
     settings: Settings | None = None,
     client: Client | None = None,
@@ -165,8 +198,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--truncate", action="store_true", help="empty each table before loading")
     args = parser.parse_args(argv)
 
-    tables = tuple(args.tables.split(",")) if args.tables else tuple(RAW_COLUMNS)
-    unknown = set(tables) - set(RAW_COLUMNS)
+    tables = tuple(args.tables.split(",")) if args.tables else ALL_TABLES
+    unknown = set(tables) - set(ALL_TABLES)
     if unknown:
         parser.error(f"unknown tables: {', '.join(sorted(unknown))}")
 

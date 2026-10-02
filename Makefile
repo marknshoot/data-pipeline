@@ -10,7 +10,7 @@ export
 .DEFAULT_GOAL := help
 .PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
 	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw dbt dbt-build \
-	metabase-setup screenshots py shell
+	metabase-setup screenshots py shell consume-events kafka-engine
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -55,6 +55,12 @@ gen-orders: env ## Continuously generate orders (make gen-orders ARGS="--rate 10
 
 gen-events: env ## Publish clickstream events to Kafka (make gen-events ARGS="--rate 40")
 	uv run python -m generators.event_generator $(ARGS)
+
+consume-events: env ## Kafka -> lake, at-least-once (make consume-events ARGS="--max-seconds 30")
+	uv run python -u -m streaming.lake_consumer $(ARGS)
+
+kafka-engine: env ## ClickHouse Kafka engine + live minute view (make kafka-engine ARGS="--verify")
+	uv run python -m streaming.kafka_engine $(ARGS)
 
 extract: env ## Incremental OLTP extract to the lake (make extract ARGS="--tables orders")
 	uv run python -m ingestion.oltp_extract --incremental $(ARGS)

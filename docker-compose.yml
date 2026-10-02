@@ -170,7 +170,7 @@ services:
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-9094}
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://127.0.0.1:${KAFKA_PORT:-9094}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -180,6 +180,10 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 72
+      # Must match the volume below. The image's default is $KAFKA_HOME/logs, which is
+      # inside the container: without this, every `up` that recreates the container
+      # silently wipes every topic (and consumer-group offset) with it.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
     ports: ["127.0.0.1:${KAFKA_PORT:-9094}:9094"]
     volumes:

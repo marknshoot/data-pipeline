@@ -36,3 +36,14 @@ sources:
         description: Order lines, with the unit price captured at purchase time.
       - name: payments
         description: Payment attempts for an order.
+      - name: events
+        description: >
+          Clickstream events landed by the Kafka lake consumer (at-least-once, so
+          event_id repeats; the table keeps the newest `consumed_at` per event).
+          Rows mix schema v1 and v2, hence the nullable device columns.
+        # Events carry no updated_at: freshness is measured on when the consumer
+        # wrote them, and the stream is expected to be within hours, not days.
+        loaded_at_field: consumed_at
+        freshness:
+          warn_after: { count: 3, period: hour }
+          error_after: { count: 12, period: hour }

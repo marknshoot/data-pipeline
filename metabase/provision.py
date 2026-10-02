@@ -146,11 +146,14 @@ def ensure_clickhouse_ro_user(settings: Settings) -> None:
     # Converge the password to whatever .env holds, so rotating it is just an edit.
     admin.command(f"ALTER USER {user} IDENTIFIED BY '{password}'")
     admin.command(f"GRANT SELECT ON marts.* TO {user}")
+    # The live dashboard reads ClickHouse's own Kafka-fed tables, which live in
+    # `analytics` rather than `marts`.
+    admin.command(f"GRANT SELECT ON analytics.* TO {user}")
     # readonly=2: read queries only, but session settings may still be changed.
     # readonly=1 forbids setting changes, which breaks clients like Metabase that
     # set per-session options (e.g. async_insert) on connect.
     admin.command(f"ALTER USER {user} SETTINGS readonly = 2")
-    print(f"clickhouse read-only user '{user}' ready (SELECT on marts.*)")
+    print(f"clickhouse read-only user '{user}' ready (SELECT on marts.*, analytics.*)")
 
 
 def _find(items: list[dict], name: str) -> dict | None:
@@ -234,7 +237,11 @@ def ensure_dashboard(
                 "visualization_settings": {},
             }
         )
-    metabase.put(f"/api/dashboard/{dashboard_id}", json={"dashcards": dashcards})
+    body: dict = {"dashcards": dashcards}
+    # Metabase auto-refresh is a dashboard-level setting, in seconds.
+    if spec.get("auto_refresh_interval"):
+        body["auto_refresh_interval"] = spec["auto_refresh_interval"]
+    metabase.put(f"/api/dashboard/{dashboard_id}", json=body)
     return dashboard_id
 
 

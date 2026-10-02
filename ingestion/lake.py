@@ -77,12 +77,19 @@ def partition_date_for(ts: datetime) -> date:
 
 
 def list_keys(prefix: str = "", *, bucket: str | None = None, filesystem=None) -> list[str]:
-    """List object keys under ``prefix`` (debugging helper)."""
+    """List object keys under ``prefix`` (debugging helper).
+
+    Returns an empty list when the prefix has never been written: callers treat
+    "no objects" as a skip, and a missing prefix is not an error condition.
+    """
     fs = filesystem or build_filesystem()
     settings = get_settings()
     target_bucket = bucket or settings.s3_bucket
     selector = pafs.FileSelector(f"{target_bucket}/{prefix}".rstrip("/"), recursive=True)
-    infos = fs.get_file_info(selector)
+    try:
+        infos = fs.get_file_info(selector)
+    except FileNotFoundError:
+        return []
     return [
         info.path.removeprefix(f"{target_bucket}/")
         for info in infos

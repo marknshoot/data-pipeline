@@ -41,6 +41,7 @@ def _require(name: str) -> str:
 class Settings:
     postgres_dsn: str
     kafka_bootstrap: str
+    kafka_internal_broker: str
     kafka_topic_events: str
     s3_endpoint: str
     s3_endpoint_internal: str
@@ -76,6 +77,9 @@ def get_settings() -> Settings:
             connect_timeout="5",
         ),
         kafka_bootstrap=os.environ.get("KAFKA_BOOTSTRAP", "127.0.0.1:9094"),
+        # ClickHouse consumes the topic from inside the compose network, where the
+        # broker is reachable by service name, not on the host's localhost.
+        kafka_internal_broker=os.environ.get("KAFKA_BROKER_INTERNAL", "kafka:9092"),
         kafka_topic_events=os.environ.get("KAFKA_TOPIC_EVENTS", "clickstream.events"),
         s3_endpoint=os.environ.get("S3_ENDPOINT", "http://127.0.0.1:8333"),
         # ClickHouse runs in the compose network and must reach SeaweedFS/S3 by

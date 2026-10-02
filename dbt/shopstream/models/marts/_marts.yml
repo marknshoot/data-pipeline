@@ -134,3 +134,56 @@ models:
         data_tests: [unique, not_null]
       - name: revenue
         data_tests: [not_null]
+
+  - name: fct_events
+    description: >
+      Event-grain clickstream fact, deduplicated by event_id. Incremental with a
+      three-hour lookback so late events land in the hour they belong to.
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: event_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [page_view, add_to_cart, checkout, purchase]
+      - name: user_id
+        data_tests: [not_null]
+      - name: session_id
+        data_tests: [not_null]
+      - name: event_time
+        data_tests: [not_null]
+      - name: event_date
+        data_tests: [not_null]
+
+  - name: mart_funnel_daily
+    description: >
+      Session-grain daily acquisition funnel. A session counts at a step if it
+      produced that event type on that day.
+    columns:
+      - name: event_date
+        data_tests: [unique, not_null]
+      - name: page_view_sessions
+        data_tests: [not_null]
+      - name: purchase_sessions
+        data_tests: [not_null]
+
+  - name: mart_funnel_steps
+    description: >
+      The funnel as one ordered series for a funnel chart, with share of the entry
+      step and drop-off from the previous step.
+    columns:
+      - name: step_order
+        data_tests: [unique, not_null]
+      - name: step
+        data_tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [page_view, add_to_cart, checkout, purchase]
+      - name: sessions
+        data_tests: [not_null]
+      - name: share_of_entry
+        data_tests: [not_null]

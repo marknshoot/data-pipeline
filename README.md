@@ -6,12 +6,14 @@ dbt → Airflow → Metabase**, with every layer containerised and reproducible 
 single `make` command.
 
 The point of the project is the parts that are hard: **backfills that can be safely
-re-run**, **duplicate and late data**, **SCD2 history**, **incremental facts**, and
-**orchestration that reacts to data instead of a clock**.
+re-run**, **duplicate and late data**, **SCD2 history**, **incremental facts**,
+**at-least-once streaming**, and **orchestration that reacts to data instead of a
+clock**.
 
-> **Status:** the batch path (Phases 1–4) is complete and verified end-to-end.
-> Streaming (Kafka → lake), Spark, and CI are in progress — see
-> [Roadmap](#roadmap). Anything marked *planned* below is not built yet.
+> **Status:** the batch and streaming paths (Phases 1–5) are complete and verified
+> end-to-end — including a kill-the-consumer-mid-flight durability test. Spark and CI
+> are in progress — see [Roadmap](#roadmap). Anything marked *planned* below is not
+> built yet.
 
 <!-- Screenshots --------------------------------------------------------- -->
 
@@ -22,12 +24,17 @@ the 9.9 flash-sale day the generators simulate:
 
 ![Marketplace Overview dashboard](docs/img/metabase-marketplace-overview.png)
 
-Cohort retention and customer behaviour, including a repeat-purchase rate and
-revenue by shipping city:
+Cohort retention, customer behaviour and the acquisition funnel built from
+clickstream events:
 
 ![Customer dashboard](docs/img/metabase-customer.png)
 
-Airflow 3 runs the pipeline on a **data asset**, not a schedule — the
+The streaming panel reads ClickHouse's own Kafka consumption, so it moves as events
+arrive rather than waiting for the hourly batch — it auto-refreshes every 30 seconds:
+
+![Live Traffic dashboard](docs/img/metabase-live-traffic.png)
+
+Airflow 3 runs the batch pipeline on a **data asset**, not a schedule — the
 `warehouse_build` DAG is triggered whenever `oltp_extract` lands new Parquet:
 
 ![warehouse_build DAG](docs/img/airflow-warehouse-build.png)
@@ -36,11 +43,12 @@ Airflow 3 runs the pipeline on a **data asset**, not a schedule — the
 
 | | |
 |---|---|
-| dbt | 18 models (7 staging, 5 dimensions, 3 incremental facts, 3 marts) + 2 SCD2 snapshots |
-| Data quality | **96 dbt data tests** (incl. custom reconciliation + SCD2 integrity) and **35 pytest tests** |
+| dbt | 22 models (7 staging, 5 dimensions, 4 facts, 3 marts) + 2 SCD2 snapshots |
+| Data quality | **125 dbt data tests** (incl. custom reconciliation, SCD2 and funnel integrity) and **59 pytest tests** |
 | Warehouse | ClickHouse 26.3: `raw` (ReplacingMergeTree) → `staging` (views) → `marts` |
+| Streaming | Kafka 4 (6 partitions, keyed by `user_id`) → lake via an at-least-once consumer, plus a ClickHouse Kafka-engine path for the live panel |
 | Orchestration | Airflow 3.3 (LocalExecutor), asset-triggered; hourly extract with catchup |
-| Verified | Backfills are idempotent; re-running `dbt build` does not duplicate fact rows |
+| Verified | Backfills and fact rebuilds are idempotent; `SIGKILL`ing the consumer mid-batch loses no events |
 | Stack | Postgres 16 · Kafka 4 · SeaweedFS (S3) · PySpark · ClickHouse · dbt 1.12 · Airflow 3 · Metabase |
 | Runs on | ~8 GB RAM via Compose profiles and per-service memory limits |
 
@@ -57,7 +65,7 @@ flowchart LR
 
     subgraph lake["Data lake — SeaweedFS (S3 API)"]
         RAW["raw/oltp/&lt;table&gt;/dt=.../<br/>Parquet"]
-        EVRAW["raw/events/"]
+        EVRAW["raw/events/dt=.../hr=.../"]
         CLEAN["clean/events/"]
         DLQ["dlq/events/"]
     end
@@ -66,28 +74,31 @@ flowchart LR
         CHRAW["raw.*"]
         CHSTG["staging.* (views)"]
         CHMART["marts.*<br/>dims + facts + marts"]
+        LIVE["analytics.rt_events<br/>+ live views"]
     end
 
-    K["Kafka 4<br/>clickstream.events"]
+    K["Kafka 4<br/>clickstream.events<br/>6 partitions"]
     SPARK["PySpark<br/>clean_events"]
     AF["Airflow 3"]
     MB["Metabase"]
 
     GEN --> PG
     PG -->|"oltp_extract (hourly, backfill-safe)"| RAW
-    GEN -.-> K
-    K -.->|"lake_consumer<br/>at-least-once"| EVRAW
+    GEN -->|"keyed by user_id"| K
+    K -->|"lake_consumer (at-least-once)"| EVRAW
+    K -->|"Kafka engine (live)"| LIVE
+    EVRAW -->|"malformed records"| DLQ
     EVRAW -.-> SPARK
     SPARK -.-> CLEAN
-    EVRAW -.->|malformed| DLQ
     CLEAN -.-> CHRAW
     RAW -->|"load_raw (s3() → Parquet)"| CHRAW
     CHRAW --> CHSTG --> CHMART
     AF -->|"asset-triggered: load_raw → dbt build"| CHMART
     CHMART --> MB
+    LIVE -->|"auto-refresh 30s"| MB
 
     classDef planned stroke-dasharray: 6 4,color:#888
-    class K,SPARK,CLEAN,DLQ,EVRAW planned
+    class SPARK,CLEAN planned
 ```
 
 ## Simulated data, on purpose
@@ -100,7 +111,7 @@ exercise none of the machinery above:
 | duplicate `event_id`, delivered twice | `event_generator` | ~2% |
 | late events (`event_time` up to 2h back) | `event_generator` | ~3% |
 | schema v2: `device` → `device_type` + `platform_version` | `event_generator` | from `--schema-v2-start` |
-| malformed JSON / missing fields | `event_generator` → dead-letter (Phase 5) | ~0.5% |
+| malformed JSON / missing fields | `event_generator` → `dlq/events/` | ~0.5% |
 | orders stalled mid-lifecycle | `seed`, `order_generator` | — |
 | price drift, stock decrements, users changing city | `order_generator` | — |
 
@@ -135,6 +146,7 @@ erDiagram
     dim_date ||--o{ fct_orders : "order_date"
     fct_orders ||--o{ fct_order_items : "order_id"
     fct_orders ||--o{ fct_payments : "order_id"
+    dim_users ||--o{ fct_events : "user_id"
 
     dim_users {
         uint64 user_sk PK
@@ -169,12 +181,22 @@ erDiagram
         decimal unit_price
         decimal line_amount
     }
+    fct_events {
+        string event_id PK
+        int64 user_id FK
+        string session_id
+        string event_type
+        datetime event_time
+        date event_date
+    }
 ```
 
 Dimensions: `dim_users` (SCD2) · `dim_products` (SCD2) · `dim_sellers` (SCD1) ·
 `dim_categories` · `dim_date`.
-Facts: `fct_orders` · `fct_order_items` · `fct_payments` (all incremental).
-Marts: `mart_daily_gmv` · `mart_cohort_retention` · `mart_seller_performance`.
+Facts: `fct_orders` · `fct_order_items` · `fct_payments` · `fct_events` (all
+incremental).
+Marts: `mart_daily_gmv` · `mart_cohort_retention` · `mart_seller_performance` ·
+`mart_funnel_daily` · `mart_funnel_steps`.
 
 ## Quick start
 
@@ -189,10 +211,21 @@ make up-core        # postgres + seaweedfs (S3) + clickhouse
 make seed           # Faker: 10k users, 500 sellers, 5k products, 30 days of orders
 make extract        # Postgres -> Parquet in the lake
 make load-raw       # lake Parquet -> ClickHouse raw tables
-make dbt-build      # dbt: snapshots, staging, dims, facts, marts, 96 tests
+make dbt-build      # dbt: snapshots, staging, dims, facts, marts, 125 tests
 make up-orch        # Airflow at http://localhost:8080
 make up-bi          # Metabase at http://localhost:3000
 make metabase-setup # provision the connection + dashboards from code
+```
+
+The streaming path (needs `make up-stream`):
+
+```bash
+make up-stream      # kafka (KRaft) + create the 6-partition topic
+make gen-events     # publish clickstream: duplicates, late and malformed records
+make consume-events # Kafka -> lake, at-least-once, dead-lettering bad payloads
+make load-raw       # now also loads raw.events (skipped when the lake is empty)
+make kafka-engine   # ClickHouse Kafka engine + the live per-minute views
+make kafka-engine ARGS="--verify"   # check the live path and its consumers
 ```
 
 | Service | URL |
@@ -239,10 +272,25 @@ current version.
 picked up without duplicating rows. Re-running `dbt build` leaves row counts
 unchanged.
 
-**Delivery guarantees are chosen, not inherited.** The streaming path (Phase 5) is
-at-least-once with offsets committed only after the S3 write succeeds, and
-downstream dedup by `event_id` — because exactly-once across Kafka and object storage
-is a fiction that usually costs correctness.
+**Delivery guarantees are chosen, not inherited.** The streaming path is
+at-least-once: offsets are committed only *after* the S3 write succeeds, with
+`enable.auto.offset.store` off so the client can never commit data it has not
+persisted. Redelivery is therefore possible, which is why `raw.events` is a
+`ReplacingMergeTree` keyed by `event_id` — and why that is cheaper than pretending
+exactly-once across Kafka and object storage is achievable. Verified by `SIGKILL`ing
+the consumer mid-batch: the kill left partition 0 with a lag of 295 uncommitted
+records, and the restart consumed exactly those 295.
+
+**Late events get a lookback window.** The generator sends ~3% of events up to two
+hours behind, so `fct_events` re-reads a three-hour window on every incremental run
+and `delete+insert`s on `event_id`. A late event lands in the hour it *belongs* to,
+not the hour it arrived in.
+
+**The live panel is event-grain, not a pre-aggregated counter.** ClickHouse's Kafka
+engine is also at-least-once, so a `SummingMergeTree` minute counter double-counts on
+rebalance — measured, not theorised: 11,427 events from 8,724 messages. Keying the
+live table on `event_id` and aggregating on read makes redelivery idempotent, and the
+numbers reconcile exactly with the topic.
 
 **The pipeline is triggered by data.** `oltp_extract` declares an Airflow asset and
 `warehouse_build` is scheduled on it, so the warehouse rebuilds when the lake
@@ -261,20 +309,44 @@ Real numbers from the running stack (internal consistency is enforced by tests):
 | Active buyers | 3,755 |
 | Repeat purchase rate | 0.22 |
 | SCD2 versions captured | 10,073 users · 5,915 products (73 city moves, 915 product changes) |
-| `dbt build` | **116 nodes, 0 errors** |
+| Clickstream | 5,995 topic messages → 5,854 distinct events (25 dead-lettered, 116 duplicate copies collapsed) |
+| Acquisition funnel | 3,869 sessions → 1,038 cart → 408 checkout → 280 purchase |
+| `dbt build` | **149 nodes, 0 errors** |
 | Airflow | 73-run hourly backfill, asset-triggered warehouse rebuilds, ~1.4 s per run |
+| Durability | `SIGKILL` mid-batch → 0 events lost; the restart resumed at exactly the uncommitted offset |
 
 ## Testing
 
-- **35 pytest tests** — traffic curves, event/order factories, generator loops, Arrow
-  schema mapping, lake layout, and a live backfill idempotency check.
-- **96 dbt data tests** — `unique`, `not_null`, `relationships`, `accepted_values`,
+- **59 pytest tests** — traffic curves, event/order factories, generator loops, Arrow
+  schema mapping, lake layout, a live backfill idempotency check, and the consumer's
+  delivery contract with fakes (a fake consumer records every `commit`; a failing
+  sink must produce *no* commit).
+- **125 dbt data tests** — `unique`, `not_null`, `relationships`, `accepted_values`,
   plus custom checks that generic tests cannot express:
   - every order's stored total equals the sum of its lines
   - revenue computed from `fct_orders` equals revenue from `fct_order_items`
   - each SCD2 dimension has exactly one current row per business key
   - cohort grain and retention bounds (month 0 must be 1.0, never above 1)
+  - the funnel never widens, overall or on any single day, and its rates stay in [0, 1]
   - no column names leaked a table alias (a real ClickHouse footgun — see below)
+
+### The streaming durability test
+
+`SIGKILL` the consumer while a batch is in flight, restart the same consumer group,
+and check the lake against the topic:
+
+```bash
+# 5,995 messages on the topic, 25 of them deliberately malformed,
+# 116 of them duplicate copies of an existing event_id
+EXPECTED_DISTINCT=5854
+```
+
+| | |
+|---|---|
+| Before the kill | 19 batches committed; partition 0 left with a lag of 295 |
+| After the restart | consumed exactly 295 records (292 valid + 3 malformed) |
+| Lake result | 5,970 rows written, **5,854 distinct `event_id`s**, 25 dead-lettered |
+| Verdict | no events lost; redelivery cost 116 duplicate rows, removed by `event_id` |
 
 ## Notes for anyone reading the SQL
 
@@ -293,6 +365,21 @@ config comment:
 4. **An empty interval must not write an empty Parquet object.** ClickHouse's Parquet
    reader rejects row groups with zero rows, so the extractor skips zero-row windows
    entirely (runs are still recorded in `pipeline_meta.extract_run`).
+5. **A missing lake prefix is not an error.** `list_keys` returns `[]` rather than
+   raising, so `load_raw` reports `events  skipped (no objects in the lake)` on a
+   fresh clone instead of crashing.
+
+### Kafka engine
+
+6. **`kafka_auto_offset_reset` no longer exists.** ClickHouse 26.3 removed the
+   setting, so a fresh consumer group replays the topic before going live.
+7. **Drop the target table too.** The provisioning is DROP-then-CREATE; forgetting to
+   drop the `SummingMergeTree` target failed *after* dropping the materialized view,
+   leaving the live path half-built. Order is view → MV → source → target.
+8. **`KAFKA_LOG_DIRS` must match the mounted volume.** The image writes to
+   `$KAFKA_HOME/logs` by default, so a volume mounted at `/var/lib/kafka/data` is
+   decorative: every `docker compose up` that recreated the container silently wiped
+   every topic. Caught by recreating the container and watching the topic disappear.
 
 ### Airflow 3 in containers
 
@@ -319,8 +406,9 @@ the connection.
 ```
 generators/        Faker seeding, order + clickstream generators, traffic curves
 ingestion/         lake helpers, incremental OLTP extractor
+streaming/         Kafka -> lake consumer (at-least-once) + ClickHouse Kafka engine
 warehouse/         ClickHouse client + lake→raw loader
-dbt/shopstream/    staging → dimensions/facts → marts, snapshots, 96 tests
+dbt/shopstream/    staging → dimensions/facts → marts, snapshots, 125 tests
 airflow/dags/      oltp_extract (asset producer), warehouse_build (asset consumer)
 clickhouse/init/   raw table DDL
 metabase/          dashboard definitions + reproducible provisioning
@@ -337,8 +425,8 @@ docs/img/          screenshots referenced by this README
 - [x] **Phase 2** — S3 lake, idempotent incremental extract, Airflow orchestration
 - [x] **Phase 3** — ClickHouse raw layer, dbt star schema, SCD2, 96 tests
 - [x] **Phase 4** — Metabase dashboards, provisioned from code
-- [ ] **Phase 5** — Kafka → lake consumer (at-least-once, dead-letter), `fct_events`,
-      the acquisition funnel mart, and the ClickHouse Kafka engine for a live panel
+- [x] **Phase 5** — Kafka → lake consumer (at-least-once, dead-letter), `fct_events`,
+      the acquisition funnel, the ClickHouse Kafka engine, and the live panel
 - [ ] **Phase 6** — PySpark `clean_events`: dedup by `event_id`, merge schema v1/v2,
       partition by event time, reprocess a lookback window for late data
 - [ ] **Phase 7** — Data-quality monitoring: source↔warehouse row counts, failure
@@ -351,8 +439,14 @@ docs/img/          screenshots referenced by this README
 - **`load_raw` re-reads every lake object every run.** Correct but O(history); the fix
   is to load only objects newer than a watermark, which `pipeline_meta.extract_run`
   already records.
-- **The funnel mart and `fct_events` need Phase 5.** They are marked *planned* above
-  rather than faked.
+- **No Spark clean layer yet.** Events go lake → ClickHouse directly, so the schema
+  merge and `event_id` dedup happen in the warehouse rather than in files. Phase 6
+  moves that to Spark and repartitions by event time, which is also what makes late
+  events cheap to reprocess.
+- **The funnel counts sessions per step, not strictly ordered journeys.** A session
+  that added to cart without a page view still counts at the cart step. That is a
+  deliberate choice — the alternative hides the inconsistency instead of failing the
+  monotonicity test.
 - **No CI yet**, so nothing enforces the test suite on push.
 - **Simulated data.** The distributions, category tree and imperfections are
   deliberate, not sampled from a real marketplace — chosen because a static public
@@ -360,7 +454,8 @@ docs/img/          screenshots referenced by this README
   is designed to handle.
 - **Single-node, single-broker, single-shard.** This is a laptop-scale design;
   ClickHouse replication, Kafka replication factor > 1 and Spark on a cluster are out
-  of scope.
+  of scope. The consumer's at-least-once guarantee is exercised, but broker failover
+  is not.
 
 ## License
 
