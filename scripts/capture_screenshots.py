@@ -103,7 +103,7 @@ def capture_airflow(page: Page, base_url: str) -> list[Path]:
     written.append(target)
     print(f"  captured {target.name}  (DAG list)")
 
-    for dag_id in ("warehouse_build", "oltp_extract"):
+    for dag_id in ("warehouse_build", "oltp_extract", "clean_events"):
         # Airflow 3 renders the DAG graph on the DAG detail page itself; there is no
         # /dags/<id>/graph route (that 404s).
         page.goto(f"{base_url}/dags/{dag_id}", wait_until="networkidle")

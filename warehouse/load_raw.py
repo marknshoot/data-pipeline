@@ -96,11 +96,12 @@ RAW_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Clickstream events are written by streaming/lake_consumer.py, not the OLTP
-# extractor, so they live under a different lake prefix. Column order matches
-# streaming.lake_consumer.EVENT_SCHEMA and clickhouse/init/02_events.sql.
+# Clickstream events are written by streaming/lake_consumer.py, cleaned by the Spark
+# job (spark/clean_events.py) and read from its output, not from the consumer's raw
+# layer: dedup by event_id, the v1/v2 schema merge and event-time partitioning all
+# happen there. Column order matches warehouse.load_raw and clickhouse/init/02_events.sql.
 EVENTS_TABLE = "events"
-EVENTS_PREFIX = "raw/events"
+EVENTS_PREFIX = "clean/events"
 EVENTS_COLUMNS: tuple[str, ...] = (
     "event_id",
     "schema_version",
@@ -110,7 +111,6 @@ EVENTS_COLUMNS: tuple[str, ...] = (
     "product_id",
     "event_time",
     "city",
-    "device",
     "device_type",
     "platform_version",
     "consumed_at",

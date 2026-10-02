@@ -1,18 +1,12 @@
--- Clickstream raw layer: one row per event, loaded from the lake by
+-- Clickstream raw layer: one row per event, loaded from the lake's *clean* layer by
 -- `warehouse.load_raw --tables events`.
 --
--- The Kafka consumer is at-least-once (offsets are committed only after the S3
--- write succeeds), and the generator deliberately re-sends ~2% of events with an
--- identical `event_id`. The same event can therefore appear in several lake
--- objects. ReplacingMergeTree(consumed_at) keyed by `event_id` converges to one
--- row per event, exactly as raw.orders does for repeated `updated_at` versions.
--- Merges are asynchronous, so exact queries use FINAL (staging does this).
+-- The Spark job (spark/clean_events.py) owns deduplication by `event_id`, the v1/v2
+-- schema merge and event-time partitioning, so this table reads a layer that is
+-- already deduplicated. ReplacingMergeTree is kept anyway: the load appends every
+-- object under clean/events/, and re-running it must stay idempotent.
 --
--- Schema v1 and v2 coexist in the same topic: v1 carries `device`, v2 carries
--- `device_type` plus `platform_version`. All three columns exist and are nullable;
--- staging coalesces them into a single `device_type`.
---
--- Types mirror the Parquet schema written by streaming/lake_consumer.py.
+-- Types mirror the Parquet schema written by spark/clean_events.py.
 
 CREATE TABLE IF NOT EXISTS raw.events
 (
@@ -24,10 +18,14 @@ CREATE TABLE IF NOT EXISTS raw.events
     product_id Int64,
     event_time DateTime64(6, 'UTC'),
     city String,
-    device Nullable(String),
     device_type Nullable(String),
     platform_version Nullable(String),
     consumed_at DateTime64(6, 'UTC')
 )
 ENGINE = ReplacingMergeTree(consumed_at)
 ORDER BY event_id;
+
+-- `device` belonged to the raw layer: schema v1 sent it, v2 sent `device_type`, and
+-- the clean layer now resolves the two into `device_type`. Dropping it here keeps an
+-- existing installation convergent with a fresh one (`make ch-schema` is re-runnable).
+ALTER TABLE raw.events DROP COLUMN IF EXISTS device;

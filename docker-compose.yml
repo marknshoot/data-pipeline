@@ -72,7 +72,12 @@ x-airflow-common: &airflow-common
     - ./airflow/dags:/opt/airflow/repo/airflow/dags:ro
     - ./generators:/opt/airflow/repo/generators:ro
     - ./ingestion:/opt/airflow/repo/ingestion:ro
+    - ./spark:/opt/airflow/repo/spark:ro
+    - ./streaming:/opt/airflow/repo/streaming:ro
+    - ./tests:/opt/airflow/repo/tests:ro
     - ./warehouse:/opt/airflow/repo/warehouse:ro
+    # pytest's config (markers, testpaths). A single file, so no secret is exposed.
+    - ./pyproject.toml:/opt/airflow/repo/pyproject.toml:ro
     - ./dbt:/opt/airflow/repo/dbt:ro
     - airflow_logs:/opt/airflow/logs
   depends_on:
@@ -245,7 +250,9 @@ services:
     <<: *airflow-common
     profiles: [orch]
     command: ["airflow", "scheduler"]
-    mem_limit: 700m
+    # Higher than the other Airflow services because the LocalExecutor runs tasks in
+    # this container -- including the Spark driver for clean_events.
+    mem_limit: 2000m
     depends_on:
       postgres: { condition: service_healthy }
       airflow-init: { condition: service_completed_successfully }
@@ -258,6 +265,23 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       airflow-init: { condition: service_completed_successfully }
+
+  # ----------------------------------------------------------------- spark
+  # One-shot Spark runner, reusing the Airflow image so the job's dependencies (JVM,
+  # pyspark, pyarrow) exist in exactly one place. Used by `make spark-clean` and
+  # `make spark-test` so Spark work does not require starting Airflow.
+  spark:
+    <<: *airflow-common
+    profiles: [spark]
+    restart: "no"
+    # The Airflow image's workdir is /opt/airflow, not the mounted repo.
+    working_dir: /opt/airflow/repo
+    entrypoint: ["python"]
+    command: ["-m", "spark.clean_events", "--help"]
+    mem_limit: 2000m
+    depends_on:
+      postgres: { condition: service_healthy }
+      seaweedfs: { condition: service_healthy }
 
   # ------------------------------------------------------------------ bi
   metabase:

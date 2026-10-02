@@ -36,3 +36,6 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+markers = [
+    "spark: needs a JVM and pyspark; run with `make spark-test`",
+]

@@ -10,10 +10,9 @@ re-run**, **duplicate and late data**, **SCD2 history**, **incremental facts**,
 **at-least-once streaming**, and **orchestration that reacts to data instead of a
 clock**.
 
-> **Status:** the batch and streaming paths (Phases 1–5) are complete and verified
-> end-to-end — including a kill-the-consumer-mid-flight durability test. Spark and CI
-> are in progress — see [Roadmap](#roadmap). Anything marked *planned* below is not
-> built yet.
+> **Status:** Phases 1–6 are complete and verified end-to-end — including a
+> kill-the-consumer-mid-flight durability test and the Spark clean layer. CI is in
+> progress — see [Roadmap](#roadmap). Anything marked *planned* below is not built yet.
 
 <!-- Screenshots --------------------------------------------------------- -->
 
@@ -39,22 +38,28 @@ Airflow 3 runs the batch pipeline on a **data asset**, not a schedule — the
 
 ![warehouse_build DAG](docs/img/airflow-warehouse-build.png)
 
+The Spark clean job runs hourly and publishes its own asset, which is what triggers
+the warehouse rebuild — neither DAG names the other:
+
+![clean_events DAG](docs/img/airflow-clean-events.png)
+
 ## At a glance
 
 | | |
 |---|---|
 | dbt | 22 models (7 staging, 5 dimensions, 4 facts, 3 marts) + 2 SCD2 snapshots |
-| Data quality | **125 dbt data tests** (incl. custom reconciliation, SCD2 and funnel integrity) and **59 pytest tests** |
+| Data quality | **125 dbt data tests** (incl. custom reconciliation, SCD2 and funnel integrity) and **74 pytest tests** |
 | Warehouse | ClickHouse 26.3: `raw` (ReplacingMergeTree) → `staging` (views) → `marts` |
 | Streaming | Kafka 4 (6 partitions, keyed by `user_id`) → lake via an at-least-once consumer, plus a ClickHouse Kafka-engine path for the live panel |
-| Orchestration | Airflow 3.3 (LocalExecutor), asset-triggered; hourly extract with catchup |
-| Verified | Backfills and fact rebuilds are idempotent; `SIGKILL`ing the consumer mid-batch loses no events |
+| Processing | PySpark 4.1 clean layer: dedup by `event_id`, merge schema v1/v2, partition by event time, and a lookback that *replaces* partitions rather than appending |
+| Orchestration | Airflow 3.3 (LocalExecutor), asset-triggered in both directions; hourly extract and hourly clean with catchup |
+| Verified | Backfills and fact rebuilds are idempotent; `SIGKILL`ing the consumer mid-batch loses no events; a rerun replaces a clean partition instead of duplicating it |
 | Stack | Postgres 16 · Kafka 4 · SeaweedFS (S3) · PySpark · ClickHouse · dbt 1.12 · Airflow 3 · Metabase |
 | Runs on | ~8 GB RAM via Compose profiles and per-service memory limits |
 
 ## Architecture
 
-Solid arrows are implemented; dashed arrows are planned.
+Every arrow below is implemented.
 
 ```mermaid
 flowchart LR
@@ -65,8 +70,8 @@ flowchart LR
 
     subgraph lake["Data lake — SeaweedFS (S3 API)"]
         RAW["raw/oltp/&lt;table&gt;/dt=.../<br/>Parquet"]
-        EVRAW["raw/events/dt=.../hr=.../"]
-        CLEAN["clean/events/"]
+        EVRAW["raw/events/dt=.../hr=.../<br/>by consume time"]
+        CLEAN["clean/events/dt=.../hr=.../<br/>by event time"]
         DLQ["dlq/events/"]
     end
 
@@ -78,7 +83,7 @@ flowchart LR
     end
 
     K["Kafka 4<br/>clickstream.events<br/>6 partitions"]
-    SPARK["PySpark<br/>clean_events"]
+    SPARK["PySpark 4.1<br/>clean_events"]
     AF["Airflow 3"]
     MB["Metabase"]
 
@@ -88,17 +93,15 @@ flowchart LR
     K -->|"lake_consumer (at-least-once)"| EVRAW
     K -->|"Kafka engine (live)"| LIVE
     EVRAW -->|"malformed records"| DLQ
-    EVRAW -.-> SPARK
-    SPARK -.-> CLEAN
-    CLEAN -.-> CHRAW
+    EVRAW -->|"dedup + schema merge"| SPARK
+    SPARK -->|"partition by event_time"| CLEAN
+    CLEAN -->|"load_raw (s3() → Parquet)"| CHRAW
     RAW -->|"load_raw (s3() → Parquet)"| CHRAW
     CHRAW --> CHSTG --> CHMART
     AF -->|"asset-triggered: load_raw → dbt build"| CHMART
+    AF -->|"hourly"| SPARK
     CHMART --> MB
     LIVE -->|"auto-refresh 30s"| MB
-
-    classDef planned stroke-dasharray: 6 4,color:#888
-    class SPARK,CLEAN planned
 ```
 
 ## Simulated data, on purpose
@@ -228,6 +231,14 @@ make kafka-engine   # ClickHouse Kafka engine + the live per-minute views
 make kafka-engine ARGS="--verify"   # check the live path and its consumers
 ```
 
+The Spark clean layer (the container provides the JVM, so the host needs none):
+
+```bash
+make spark-clean               # clean the last 3 hours into clean/events
+make spark-clean ARGS="--full" # first run: every raw partition
+make spark-test                # the Spark job's tests, run in the container
+```
+
 | Service | URL |
 |---|---|
 | Airflow | `http://localhost:8080` |
@@ -286,6 +297,16 @@ hours behind, so `fct_events` re-reads a three-hour window on every incremental 
 and `delete+insert`s on `event_id`. A late event lands in the hour it *belongs* to,
 not the hour it arrived in.
 
+**The Spark layer replaces partitions, it does not append to them.** A run reprocesses
+the last three whole hours and deletes each affected `dt=/hr=` prefix before writing
+it. Appending would be simpler and wrong: a rerun that produced fewer rows would leave
+the previous run's files in place and quietly double-count. The window also starts on
+an hour boundary, so the oldest partition it touches is rebuilt from all of its events
+rather than a partial hour — and because an event cannot be consumed before it
+happens, selecting raw objects by their *path* is enough to guarantee the window is
+complete. The job refuses to run with a lookback shorter than the producer's maximum
+lateness, because that combination can silently drop a late event.
+
 **The live panel is event-grain, not a pre-aggregated counter.** ClickHouse's Kafka
 engine is also at-least-once, so a `SummingMergeTree` minute counter double-counts on
 rebalance — measured, not theorised: 11,427 events from 8,724 messages. Keying the
@@ -310,17 +331,24 @@ Real numbers from the running stack (internal consistency is enforced by tests):
 | Repeat purchase rate | 0.22 |
 | SCD2 versions captured | 10,073 users · 5,915 products (73 city moves, 915 product changes) |
 | Clickstream | 5,995 topic messages → 5,854 distinct events (25 dead-lettered, 116 duplicate copies collapsed) |
-| Acquisition funnel | 3,869 sessions → 1,038 cart → 408 checkout → 280 purchase |
+| Spark clean layer | 5,970 raw rows → 5,854 out (116 duplicate deliveries removed), 3 event-time partitions, ~12 s |
+| Acquisition funnel | 4,113 sessions → 1,098 cart → 427 checkout → 292 purchase |
 | `dbt build` | **149 nodes, 0 errors** |
 | Airflow | 73-run hourly backfill, asset-triggered warehouse rebuilds, ~1.4 s per run |
 | Durability | `SIGKILL` mid-batch → 0 events lost; the restart resumed at exactly the uncommitted offset |
 
 ## Testing
 
-- **59 pytest tests** — traffic curves, event/order factories, generator loops, Arrow
-  schema mapping, lake layout, a live backfill idempotency check, and the consumer's
-  delivery contract with fakes (a fake consumer records every `commit`; a failing
-  sink must produce *no* commit).
+- **59 pytest tests** (no JVM needed) — traffic curves, event/order factories,
+  generator loops, Arrow schema mapping, lake layout, a live backfill idempotency
+  check, and the consumer's delivery contract with fakes (a fake consumer records
+  every `commit`; a failing sink must produce *no* commit).
+- **15 Spark tests** (`make spark-test`, inside the container) — a local SparkSession
+  over a lake faked with pyarrow's local filesystem, so the job's real code path runs:
+  the v1/v2 schema merge, dedup keeping the newest delivery, event-time partition
+  formatting, window selection, and that a rerun *replaces* a partition rather than
+  appending to it. They also caught a real bug — `run()` listed objects with one
+  filesystem and downloaded them with another.
 - **125 dbt data tests** — `unique`, `not_null`, `relationships`, `accepted_values`,
   plus custom checks that generic tests cannot express:
   - every order's stored total equals the sum of its lines
@@ -381,6 +409,17 @@ config comment:
    decorative: every `docker compose up` that recreated the container silently wiped
    every topic. Caught by recreating the container and watching the topic disappear.
 
+### Spark and the lake
+
+9. **pyarrow's `LocalFileSystem` rejects absolute paths.** The Spark tests fake the
+   lake with it, so the fake bucket is relative and the test changes directory. That
+   constraint is what surfaced a real bug: the job listed objects with one filesystem
+   and downloaded them with another, so it worked against real S3 and failed against
+   the fake.
+10. **`LocalExecutor` runs tasks inside the scheduler container**, so the scheduler's
+   memory limit has to fit a Spark driver, not just the scheduler. A real deployment
+   would submit to a cluster with `SparkSubmitOperator` instead of sharing a container.
+
 ### Airflow 3 in containers
 
 Three settings that are easy to get wrong, all set in `docker-compose.yml`:
@@ -407,6 +446,7 @@ the connection.
 generators/        Faker seeding, order + clickstream generators, traffic curves
 ingestion/         lake helpers, incremental OLTP extractor
 streaming/         Kafka -> lake consumer (at-least-once) + ClickHouse Kafka engine
+spark/             PySpark clean layer: dedup, schema merge, event-time partitioning
 warehouse/         ClickHouse client + lake→raw loader
 dbt/shopstream/    staging → dimensions/facts → marts, snapshots, 125 tests
 airflow/dags/      oltp_extract (asset producer), warehouse_build (asset consumer)
@@ -427,8 +467,9 @@ docs/img/          screenshots referenced by this README
 - [x] **Phase 4** — Metabase dashboards, provisioned from code
 - [x] **Phase 5** — Kafka → lake consumer (at-least-once, dead-letter), `fct_events`,
       the acquisition funnel, the ClickHouse Kafka engine, and the live panel
-- [ ] **Phase 6** — PySpark `clean_events`: dedup by `event_id`, merge schema v1/v2,
-      partition by event time, reprocess a lookback window for late data
+- [x] **Phase 6** — PySpark `clean_events`: dedup by `event_id`, merge schema v1/v2,
+      partition by event time, reprocess a lookback window and replace those
+      partitions; hourly DAG publishing an asset that triggers the warehouse rebuild
 - [ ] **Phase 7** — Data-quality monitoring: source↔warehouse row counts, failure
       alerts, a pipeline-health panel
 - [ ] **Phase 8** — CI (ruff, sqlfluff, pytest, `dbt build` in a service container)
@@ -439,15 +480,21 @@ docs/img/          screenshots referenced by this README
 - **`load_raw` re-reads every lake object every run.** Correct but O(history); the fix
   is to load only objects newer than a watermark, which `pipeline_meta.extract_run`
   already records.
-- **No Spark clean layer yet.** Events go lake → ClickHouse directly, so the schema
-  merge and `event_id` dedup happen in the warehouse rather than in files. Phase 6
-  moves that to Spark and repartitions by event time, which is also what makes late
-  events cheap to reprocess.
 - **The funnel counts sessions per step, not strictly ordered journeys.** A session
   that added to cart without a page view still counts at the cart step. That is a
   deliberate choice — the alternative hides the inconsistency instead of failing the
   monotonicity test.
 - **No CI yet**, so nothing enforces the test suite on push.
+- **Spark runs inside the Airflow container.** Fine at this scale, but a real
+  deployment submits to a cluster and does not put a driver in the scheduler's
+  container.
+- **Spark reads the lake through pyarrow rather than `s3a`.** Adding `hadoop-aws` and
+  the AWS SDK means a few hundred megabytes of jars to move a handful of small files,
+  so the transfer stays in the Python lake client the extractor and loader already
+  use. On a cluster, `fs.s3a.*` would be the right choice.
+- **The clean layer re-reads raw objects from the window's start onward** — the same
+  O(history) shape as `load_raw`, bounded by the lookback rather than fixed properly
+  with a manifest of what has already been published.
 - **Simulated data.** The distributions, category tree and imperfections are
   deliberate, not sampled from a real marketplace — chosen because a static public
   dataset cannot produce the late, duplicated and schema-evolving data the pipeline

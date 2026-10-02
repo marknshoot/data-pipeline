@@ -17,7 +17,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 
 from airflow.sdk import dag, task
-from shopstream_assets import RAW_OLTP
+from shopstream_assets import CLEAN_EVENTS, RAW_OLTP
 
 DEFAULT_ARGS = {
     "retries": 1,
@@ -29,7 +29,9 @@ DEFAULT_ARGS = {
 @dag(
     dag_id="warehouse_build",
     description="Load raw Parquet into ClickHouse and dbt build (data-triggered)",
-    schedule=[RAW_OLTP],
+    # A list of assets triggers on *any* of them: the OLTP extract and the Spark clean
+    # job both feed the raw layer, so either should refresh the warehouse.
+    schedule=[RAW_OLTP, CLEAN_EVENTS],
     start_date=datetime(2026, 9, 27, tzinfo=UTC),
     catchup=False,
     max_active_runs=1,

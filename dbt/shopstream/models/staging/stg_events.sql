@@ -9,9 +9,9 @@ select
     toDate(event_time)                  as event_date,
     toStartOfHour(event_time)           as event_hour,
     trim(city)                          as city,
-    -- Schema v1 carries `device`, v2 carries `device_type` (+ platform_version).
-    -- Coalescing here keeps the version split out of every downstream model.
-    coalesce(nullIf(device_type, ''), nullIf(device, '')) as device_type,
+    -- Schema v1's `device` and v2's `device_type` were merged by the Spark clean
+    -- layer (spark/clean_events.py), so there is nothing to coalesce here.
+    nullIf(device_type, '')             as device_type,
     nullIf(platform_version, '')        as platform_version,
     consumed_at
 from {{ source('raw', 'events') }} final
