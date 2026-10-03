@@ -11,13 +11,12 @@ listing objects, downloading, cleaning, replacing partitions -- runs without S3.
 
 from __future__ import annotations
 
-import dataclasses
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
 import pytest
 
-from generators.config import get_settings
+from generators.config import Settings
 from ingestion import lake
 from spark.clean_events import (
     CLEAN_PREFIX,
@@ -58,6 +57,42 @@ def spark():
     session.stop()
 
 
+def settings_for(bucket: str) -> Settings:
+    """A Settings built in the test, not read from the environment.
+
+    These tests need exactly one field -- the lake bucket -- but `get_settings()`
+    validates the whole environment (Postgres, S3, ClickHouse, Metabase). Reading it
+    made the suite pass on a developer machine with a `.env` and fail in CI, which is
+    precisely the environment dependence a unit test should not have.
+    """
+    placeholder = "ci"
+    return Settings(
+        postgres_dsn=f"postgresql://{placeholder}:{placeholder}@127.0.0.1:5432/{placeholder}",
+        kafka_bootstrap="127.0.0.1:9094",
+        kafka_internal_broker="kafka:9092",
+        kafka_topic_events="clickstream.events",
+        s3_endpoint="http://127.0.0.1:8333",
+        s3_endpoint_internal="http://seaweedfs:8333",
+        s3_access_key=placeholder,
+        s3_secret_key=placeholder,
+        s3_bucket=bucket,
+        s3_region="us-east-1",
+        clickhouse_host="127.0.0.1",
+        clickhouse_host_internal="clickhouse",
+        clickhouse_http_port=8123,
+        clickhouse_user=placeholder,
+        clickhouse_password=placeholder,
+        clickhouse_db="analytics",
+        clickhouse_ro_user="metabase",
+        clickhouse_ro_password=placeholder,
+        metabase_url="http://127.0.0.1:3001",
+        metabase_admin_email="ci@example.com",
+        metabase_admin_password=placeholder,
+        metabase_admin_first_name="Shop",
+        metabase_admin_last_name="Stream",
+    )
+
+
 @pytest.fixture
 def fake_lake(tmp_path, monkeypatch):
     """A local stand-in for the S3 lake: returns (filesystem, settings).
@@ -68,8 +103,7 @@ def fake_lake(tmp_path, monkeypatch):
     import pyarrow.fs as pafs
 
     monkeypatch.chdir(tmp_path)
-    settings = dataclasses.replace(get_settings(), s3_bucket="lake")
-    return pafs.LocalFileSystem(), settings
+    return pafs.LocalFileSystem(), settings_for("lake")
 
 
 def raw_row(**overrides):

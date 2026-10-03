@@ -83,8 +83,10 @@ def list_keys(prefix: str = "", *, bucket: str | None = None, filesystem=None) -
     "no objects" as a skip, and a missing prefix is not an error condition.
     """
     fs = filesystem or build_filesystem()
-    settings = get_settings()
-    target_bucket = bucket or settings.s3_bucket
+    # Only consult the environment when the bucket was not supplied: a caller that
+    # passes both a filesystem and a bucket should not need a populated .env (the
+    # Spark tests fake the lake and must not depend on one).
+    target_bucket = bucket if bucket is not None else get_settings().s3_bucket
     selector = pafs.FileSelector(f"{target_bucket}/{prefix}".rstrip("/"), recursive=True)
     try:
         infos = fs.get_file_info(selector)
@@ -102,7 +104,7 @@ def lake_stats(prefix: str = "", *, bucket: str | None = None, filesystem=None) 
     import pyarrow.parquet as pq
 
     fs = filesystem or build_filesystem()
-    target_bucket = bucket or get_settings().s3_bucket
+    target_bucket = bucket if bucket is not None else get_settings().s3_bucket
     keys = list_keys(prefix, bucket=target_bucket, filesystem=fs)
     rows = sum(pq.read_table(f"{target_bucket}/{key}", filesystem=fs).num_rows for key in keys)
     return len(keys), rows
