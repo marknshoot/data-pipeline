@@ -37,7 +37,7 @@ from clickhouse_connect.driver.client import Client
 from generators import db
 from generators.config import Settings, get_settings
 from ingestion import lake
-from warehouse.clickhouse import get_client
+from warehouse.clickhouse import apply_sql_file, get_client
 
 DDL_FILE = Path(__file__).resolve().parents[1] / "clickhouse" / "init" / "03_quality.sql"
 
@@ -202,9 +202,7 @@ def compare_series(
 
 def ensure_tables(client: Client) -> None:
     """Apply the canonical DDL, so the job works on a fresh warehouse."""
-    for statement in DDL_FILE.read_text().split(";"):
-        if statement.strip():
-            client.command(statement)
+    apply_sql_file(client, DDL_FILE)
 
 
 def write_row_counts(client: Client, results: list[RowCountResult], checked_at: datetime) -> None:

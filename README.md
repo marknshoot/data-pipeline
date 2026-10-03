@@ -1,5 +1,7 @@
 # ShopStream — a self-hosted marketplace data platform
 
+[![CI](https://github.com/marknshoot/data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/marknshoot/data-pipeline/actions/workflows/ci.yml)
+
 An end-to-end data platform for a simulated Southeast Asian e-commerce marketplace,
 built to run entirely on one laptop: **Postgres → S3-compatible lake → ClickHouse →
 dbt → Airflow → Metabase**, with every layer containerised and reproducible from a
@@ -10,10 +12,10 @@ re-run**, **duplicate and late data**, **SCD2 history**, **incremental facts**,
 **at-least-once streaming**, and **orchestration that reacts to data instead of a
 clock**.
 
-> **Status:** Phases 1–7 are complete and verified end-to-end — including a
-> kill-the-consumer-mid-flight durability test, the Spark clean layer, and row-count
-> reconciliation that was verified by injecting a fault and watching it get caught.
-> CI is in progress — see [Roadmap](#roadmap).
+> **Status:** Phases 1–8 are complete and verified end-to-end — including a
+> kill-the-consumer-mid-flight durability test, the Spark clean layer, row-count
+> reconciliation verified by injecting a fault, and CI on every push.
+> Presentation polish is in progress — see [Roadmap](#roadmap).
 
 <!-- Screenshots --------------------------------------------------------- -->
 
@@ -61,6 +63,7 @@ watching it fail:
 | Processing | PySpark 4.1 clean layer: dedup by `event_id`, merge schema v1/v2, partition by event time, and a lookback that *replaces* partitions rather than appending |
 | Orchestration | Airflow 3.3 (LocalExecutor), asset-triggered in both directions; hourly extract and hourly clean with catchup |
 | Monitoring | Hourly `data_quality` DAG: dbt source freshness, **101 source↔warehouse row-count checks**, a health snapshot for the dashboard, and an `on_failure_callback` that logs and optionally posts to a webhook |
+| CI | Four GitHub Actions jobs: lint, pytest, Spark tests, and a real `dbt build` against a ClickHouse service container |
 | Verified | Backfills and fact rebuilds are idempotent; `SIGKILL`ing the consumer mid-batch loses no events; a rerun replaces a clean partition instead of duplicating it |
 | Stack | Postgres 16 · Kafka 4 · SeaweedFS (S3) · PySpark · ClickHouse · dbt 1.12 · Airflow 3 · Metabase |
 | Runs on | ~8 GB RAM via Compose profiles and per-service memory limits |
@@ -262,6 +265,7 @@ Development:
 make lint     # ruff + sqlfluff
 make test     # pytest
 make check    # lint + test
+make ci-dbt   # rehearse CI's dbt job on a throwaway ClickHouse (Docker required)
 ```
 
 ## Design decisions worth defending
@@ -359,14 +363,42 @@ Real numbers from the running stack (internal consistency is enforced by tests):
 | Durability | `SIGKILL` mid-batch → 0 events lost; the restart resumed at exactly the uncommitted offset |
 | Fault injection | deleting 339 orders for one day → the check reported `source=339 warehouse=0 diff=+339` and the DAG failed; repairing with dbt turned it green again |
 
+## Continuous integration
+
+Four jobs on every push and pull request (`.github/workflows/ci.yml`):
+
+| Job | What it proves |
+|---|---|
+| `lint` | ruff (lint + format) and sqlfluff over `clickhouse/` |
+| `test` | 111 pytest tests — no services required; the two that talk to Postgres skip themselves when it is absent |
+| `spark` | 15 Spark tests on Temurin 17, with pyspark pulled in as an optional dependency group |
+| `dbt` | applies the warehouse DDL to a ClickHouse service container, seeds a small fixture, and runs the real `dbt build` — 149 nodes, 125 data tests |
+
+The `dbt` job is the interesting one. The full pipeline needs Postgres, Kafka,
+SeaweedFS and a JVM, which is far too much for a runner, so
+`ci/seed_sample_data.py` loads a fixture directly into `raw.*` that satisfies every
+test's invariant: order totals are computed from their line items, the funnel narrows
+at every step, one user orders in two months so cohort retention has a real month-1
+row, and both event schema versions are present.
+
+A fixture that cannot fail a test proves nothing, so its properties are asserted
+independently in `tests/test_ci_fixtures.py` — and the schema application is checked
+for statements that would be sent to ClickHouse empty.
+
+Rehearse the whole job locally without touching the dev warehouse:
+
+```bash
+make ci-dbt   # throwaway ClickHouse on :18123, then DDL + seed + dbt build
+```
+
 ## Testing
 
-- **92 pytest tests** (no JVM needed) — traffic curves, event/order factories,
+- **111 pytest tests** (no JVM needed) — traffic curves, event/order factories,
   generator loops, Arrow schema mapping, lake layout, a live backfill idempotency
   check, the consumer's delivery contract with fakes (a fake consumer records every
   `commit`; a failing sink must produce *no* commit), the row-count comparison logic,
-  and the failure callback's awkward paths — no webhook configured, webhook
-  unreachable, a bare Airflow context, a broken formatter.
+  the failure callback's awkward paths — no webhook configured, webhook unreachable,
+  a bare Airflow context, a broken formatter — and the CI fixture's own invariants.
 - **15 Spark tests** (`make spark-test`, inside the container) — a local SparkSession
   over a lake faked with pyarrow's local filesystem, so the job's real code path runs:
   the v1/v2 schema merge, dedup keeping the newest delivery, event-time partition
@@ -460,6 +492,11 @@ config comment:
    checks have no date), so it is deliberately left out of `ORDER BY`.
 12. **`value` is a SQL keyword.** The health table's column is `metric_value`;
    sqlfluff's `RF04` catches it, and so would a reader.
+13. **A semicolon inside a `--` comment splits a naive SQL file splitter.**
+   `00_databases.sql`'s header says "dbt builds staging/marts later; raw is loaded from
+   the lake", which cut the first `CREATE DATABASE` in half and sent ClickHouse an
+   empty query. `split_statements` now drops line comments before splitting, and a test
+   asserts no DDL file yields a comment-only statement.
 
 ### Airflow 3 in containers
 
@@ -491,13 +528,15 @@ monitoring/        Source-vs-warehouse row counts + the pipeline health snapshot
 spark/             PySpark clean layer: dedup, schema merge, event-time partitioning
 warehouse/         ClickHouse client + lake→raw loader
 dbt/shopstream/    staging → dimensions/facts → marts, snapshots, 125 tests
-airflow/dags/      oltp_extract (asset producer), warehouse_build (asset consumer)
-clickhouse/init/   raw table DDL
+airflow/dags/      oltp_extract, warehouse_build, clean_events, data_quality
+ci/                the CI fixture, its seeding and the schema application
+clickhouse/init/   warehouse DDL (raw tables, events, quality tables)
 metabase/          dashboard definitions + reproducible provisioning
 postgres/init/     source schema + pipeline metadata
 scripts/           screenshot capture
 tests/             pytest suite
 docs/img/          screenshots referenced by this README
+.github/workflows/ CI: lint, pytest, Spark tests, dbt build
 ```
 
 ## Roadmap
@@ -516,7 +555,10 @@ docs/img/          screenshots referenced by this README
       bounded by the extract watermark, dbt source freshness as a task, a
       `data_quality` DAG, an `on_failure_callback` that logs and optionally posts to a
       webhook, and a Pipeline Health panel
-- [ ] **Phase 8** — CI (ruff, sqlfluff, pytest, `dbt build` in a service container)
+- [x] **Phase 8** — CI: GitHub Actions running ruff, sqlfluff, pytest, the Spark tests
+      and a real `dbt build` against a ClickHouse service container on a purpose-built
+      fixture; pre-commit hooks were already in place from Phase 0. The optional AWS
+      Terraform module was deliberately not built (see Limitations)
 - [ ] **Phase 9** — Full README/demo polish and a walkthrough video
 
 ## Limitations
@@ -529,6 +571,10 @@ docs/img/          screenshots referenced by this README
   deliberate choice — the alternative hides the inconsistency instead of failing the
   monotonicity test.
 - **No CI yet**, so nothing enforces the test suite on push.
+- **No Terraform module.** The plan listed an optional AWS S3 + least-privilege IAM
+  module; it is skipped on purpose, because a portfolio repo that asks a reviewer to
+  trust an untested `apply` is worse than one that says it is out of scope. The lake
+  code is already endpoint-driven, so switching to real S3 is a config change.
 - **The freshness checks fail when the producers are stopped.** That is the intended
   behaviour — a stale pipeline should be visible — but it means the `data_quality` DAG
   is red on an idle laptop until you run the stream, the extract and the clean job.

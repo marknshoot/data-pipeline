@@ -24,6 +24,12 @@ dev = [
     "ruff==0.16.9",
     "sqlfluff==4.3.0",
 ]
+# The Spark job's runtime. Not a default dependency: the wheel bundles a Spark
+# distribution, the host has no JVM, and the container installs it from airflow/Dockerfile.
+# CI's spark job opts in with `uv sync --group spark`.
+spark = [
+    "pyspark==4.1.3",
+]
 
 [tool.ruff]
 line-length = 100

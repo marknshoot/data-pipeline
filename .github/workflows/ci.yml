@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repository.
+permissions:
+  contents: read
+
+# A new push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Fail on a lock file that does not match pyproject.toml rather than silently
+  # resolving something else than what was reviewed.
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.20"
+          enable-cache: true
+      - run: uv sync
+      - name: ruff (lint)
+        run: uv run ruff check .
+      - name: ruff (format)
+        run: uv run ruff format --check .
+      - name: sqlfluff
+        run: uv run sqlfluff lint clickhouse/
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.20"
+          enable-cache: true
+      - run: uv sync
+      # No services needed: the unit tests use fakes, and the two tests that talk to
+      # Postgres skip themselves when it is unreachable.
+      - run: uv run pytest -q
+
+  spark:
+    name: pytest (Spark)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.20"
+          enable-cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # pyspark is an optional group because the wheel bundles a Spark distribution.
+      - run: uv sync --group spark
+      - run: uv run pytest tests/test_clean_events.py -m spark -q -p no:cacheprovider
+
+  dbt:
+    name: dbt build
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        # Must match the image pinned in docker-compose.yml.
+        image: clickhouse/clickhouse-server:26.3.35.3
+        env:
+          CLICKHOUSE_USER: warehouse
+          CLICKHOUSE_PASSWORD: ci-password
+          CLICKHOUSE_DB: analytics
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123:8123
+          - 9000:9000
+    env:
+      CLICKHOUSE_HOST: 127.0.0.1
+      CLICKHOUSE_HTTP_PORT: "8123"
+      CLICKHOUSE_USER: warehouse
+      CLICKHOUSE_PASSWORD: ci-password
+      CLICKHOUSE_DB: analytics
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.20"
+          enable-cache: true
+      - run: uv sync
+
+      - name: wait for ClickHouse
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8123/ping >/dev/null; then
+              echo "ClickHouse is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ClickHouse did not become ready in time" >&2
+          exit 1
+
+      # The full pipeline needs Postgres, Kafka, SeaweedFS and a JVM. Instead, apply
+      # the warehouse DDL and load a small fixture that satisfies every test's
+      # invariant, so `dbt build` runs the real models against real (if tiny) data.
+      - name: apply the warehouse schema
+        run: uv run python -m ci.apply_ddl --include-databases
+
+      - name: seed the sample dataset
+        run: uv run python -m ci.seed_sample_data
+
+      - name: dbt build
+        run: >-
+          uv run dbt build
+          --project-dir dbt/shopstream
+          --profiles-dir dbt/shopstream

@@ -11,7 +11,7 @@ export
 .PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
 	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw dbt dbt-build \
 	metabase-setup screenshots py shell consume-events kafka-engine spark-clean spark-test \
-	quality
+	quality ci-dbt
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -70,8 +70,26 @@ spark-test: env ## Run the Spark tests (they need a JVM, so they run in the cont
 	docker compose --profile core --profile orch --profile spark run --rm --entrypoint pytest spark \
 		tests/test_clean_events.py -m spark -q -p no:cacheprovider
 
+# CI's dbt job, rehearsed locally against a throwaway ClickHouse so the dev
+# warehouse is untouched. Same image tag as docker-compose.yml and .github/workflows.
+CI_CLICKHOUSE_IMAGE := clickhouse/clickhouse-server:26.3.35.3
+CI_CH := CLICKHOUSE_HOST=127.0.0.1 CLICKHOUSE_HTTP_PORT=18123 CLICKHOUSE_USER=warehouse \
+	CLICKHOUSE_PASSWORD=ci-password CLICKHOUSE_DB=analytics
+
 quality: env ## Row-count reconciliation + pipeline health snapshot
 	uv run python -m monitoring.quality all $(ARGS)
+
+ci-dbt: ## Rehearse CI's dbt job on a throwaway ClickHouse (Docker required)
+	@docker rm -f shopstream-ci-clickhouse >/dev/null 2>&1 || true
+	docker run -d --name shopstream-ci-clickhouse -p 127.0.0.1:18123:8123 \
+		-e CLICKHOUSE_USER=warehouse -e CLICKHOUSE_PASSWORD=ci-password \
+		-e CLICKHOUSE_DB=analytics -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+		$(CI_CLICKHOUSE_IMAGE)
+	@for i in $$(seq 1 60); do curl -sf http://127.0.0.1:18123/ping >/dev/null && break; sleep 2; done
+	$(CI_CH) uv run python -m ci.apply_ddl --include-databases
+	$(CI_CH) uv run python -m ci.seed_sample_data
+	$(CI_CH) uv run dbt build --project-dir dbt/shopstream --profiles-dir dbt/shopstream
+	@docker rm -f shopstream-ci-clickhouse >/dev/null
 
 extract: env ## Incremental OLTP extract to the lake (make extract ARGS="--tables orders")
 	uv run python -m ingestion.oltp_extract --incremental $(ARGS)
