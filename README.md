@@ -10,9 +10,10 @@ re-run**, **duplicate and late data**, **SCD2 history**, **incremental facts**,
 **at-least-once streaming**, and **orchestration that reacts to data instead of a
 clock**.
 
-> **Status:** Phases 1–6 are complete and verified end-to-end — including a
-> kill-the-consumer-mid-flight durability test and the Spark clean layer. CI is in
-> progress — see [Roadmap](#roadmap). Anything marked *planned* below is not built yet.
+> **Status:** Phases 1–7 are complete and verified end-to-end — including a
+> kill-the-consumer-mid-flight durability test, the Spark clean layer, and row-count
+> reconciliation that was verified by injecting a fault and watching it get caught.
+> CI is in progress — see [Roadmap](#roadmap).
 
 <!-- Screenshots --------------------------------------------------------- -->
 
@@ -43,16 +44,23 @@ the warehouse rebuild — neither DAG names the other:
 
 ![clean_events DAG](docs/img/airflow-clean-events.png)
 
+An hourly `data_quality` DAG reconciles the source against the warehouse and writes a
+health snapshot. It was verified by deleting a day of orders from the warehouse and
+watching it fail:
+
+![Pipeline Health dashboard](docs/img/metabase-pipeline-health.png)
+
 ## At a glance
 
 | | |
 |---|---|
 | dbt | 22 models (7 staging, 5 dimensions, 4 facts, 3 marts) + 2 SCD2 snapshots |
-| Data quality | **125 dbt data tests** (incl. custom reconciliation, SCD2 and funnel integrity) and **74 pytest tests** |
+| Data quality | **125 dbt data tests** (incl. custom reconciliation, SCD2 and funnel integrity) and **107 pytest tests** |
 | Warehouse | ClickHouse 26.3: `raw` (ReplacingMergeTree) → `staging` (views) → `marts` |
 | Streaming | Kafka 4 (6 partitions, keyed by `user_id`) → lake via an at-least-once consumer, plus a ClickHouse Kafka-engine path for the live panel |
 | Processing | PySpark 4.1 clean layer: dedup by `event_id`, merge schema v1/v2, partition by event time, and a lookback that *replaces* partitions rather than appending |
 | Orchestration | Airflow 3.3 (LocalExecutor), asset-triggered in both directions; hourly extract and hourly clean with catchup |
+| Monitoring | Hourly `data_quality` DAG: dbt source freshness, **101 source↔warehouse row-count checks**, a health snapshot for the dashboard, and an `on_failure_callback` that logs and optionally posts to a webhook |
 | Verified | Backfills and fact rebuilds are idempotent; `SIGKILL`ing the consumer mid-batch loses no events; a rerun replaces a clean partition instead of duplicating it |
 | Stack | Postgres 16 · Kafka 4 · SeaweedFS (S3) · PySpark · ClickHouse · dbt 1.12 · Airflow 3 · Metabase |
 | Runs on | ~8 GB RAM via Compose profiles and per-service memory limits |
@@ -317,6 +325,18 @@ numbers reconcile exactly with the topic.
 `warehouse_build` is scheduled on it, so the warehouse rebuilds when the lake
 changes rather than an hour later on a cron.
 
+**Row-count checks are bounded by the extract watermark.** The warehouse only holds
+what has been extracted, so comparing it against *all* of Postgres would report a
+difference every time somebody placed an order since the last extract. Each check
+filters the source to rows created before that table's last extract window end.
+Without that bound the check is noise; with it, any non-zero difference is a real
+defect — which is what makes it safe to fail a task on one.
+
+**Quality checks do not gate the build.** A stale source does not mean the last build
+was wrong, and blocking the build on freshness would stop the warehouse refreshing
+exactly when it is behind. The checks live in their own DAG, so they raise the alarm
+without withholding data.
+
 ## Results
 
 Real numbers from the running stack (internal consistency is enforced by tests):
@@ -334,15 +354,19 @@ Real numbers from the running stack (internal consistency is enforced by tests):
 | Spark clean layer | 5,970 raw rows → 5,854 out (116 duplicate deliveries removed), 3 event-time partitions, ~12 s |
 | Acquisition funnel | 4,113 sessions → 1,098 cart → 427 checkout → 292 purchase |
 | `dbt build` | **149 nodes, 0 errors** |
+| Reconciliation | **101 checks, 0 mismatches** (7 source tables per day or whole-table, plus the lake vs `raw.events`) |
 | Airflow | 73-run hourly backfill, asset-triggered warehouse rebuilds, ~1.4 s per run |
 | Durability | `SIGKILL` mid-batch → 0 events lost; the restart resumed at exactly the uncommitted offset |
+| Fault injection | deleting 339 orders for one day → the check reported `source=339 warehouse=0 diff=+339` and the DAG failed; repairing with dbt turned it green again |
 
 ## Testing
 
-- **59 pytest tests** (no JVM needed) — traffic curves, event/order factories,
+- **92 pytest tests** (no JVM needed) — traffic curves, event/order factories,
   generator loops, Arrow schema mapping, lake layout, a live backfill idempotency
-  check, and the consumer's delivery contract with fakes (a fake consumer records
-  every `commit`; a failing sink must produce *no* commit).
+  check, the consumer's delivery contract with fakes (a fake consumer records every
+  `commit`; a failing sink must produce *no* commit), the row-count comparison logic,
+  and the failure callback's awkward paths — no webhook configured, webhook
+  unreachable, a bare Airflow context, a broken formatter.
 - **15 Spark tests** (`make spark-test`, inside the container) — a local SparkSession
   over a lake faked with pyarrow's local filesystem, so the job's real code path runs:
   the v1/v2 schema merge, dedup keeping the newest delivery, event-time partition
@@ -357,6 +381,18 @@ Real numbers from the running stack (internal consistency is enforced by tests):
   - cohort grain and retention bounds (month 0 must be 1.0, never above 1)
   - the funnel never widens, overall or on any single day, and its rates stay in [0, 1]
   - no column names leaked a table alias (a real ClickHouse footgun — see below)
+
+### The row-count check has teeth
+
+A check that has never failed is not evidence of anything, so the reconciliation was
+tested by breaking the pipeline on purpose:
+
+| | |
+|---|---|
+| Healthy | `data_quality` succeeds; 101 checks, 0 mismatches |
+| Inject a fault | `ALTER TABLE marts.fct_orders DELETE WHERE order_date = <one day>` |
+| Detected | `MISMATCH orders 2026-10-01 source=339 warehouse=0 diff=+339`, DAG fails, `[ALERT] data_quality.reconcile failed -- RuntimeError: row-count reconciliation found a mismatch` |
+| Repair | `dbt build --select fct_orders` → the next run succeeds |
 
 ### The streaming durability test
 
@@ -419,6 +455,11 @@ config comment:
 10. **`LocalExecutor` runs tasks inside the scheduler container**, so the scheduler's
    memory limit has to fit a Spark driver, not just the scheduler. A real deployment
    would submit to a cluster with `SparkSubmitOperator` instead of sharing a container.
+11. **A Nullable column cannot be in a MergeTree sorting key** unless
+   `allow_nullable_key` is enabled. `dq_row_counts.check_date` is nullable (whole-table
+   checks have no date), so it is deliberately left out of `ORDER BY`.
+12. **`value` is a SQL keyword.** The health table's column is `metric_value`;
+   sqlfluff's `RF04` catches it, and so would a reader.
 
 ### Airflow 3 in containers
 
@@ -446,6 +487,7 @@ the connection.
 generators/        Faker seeding, order + clickstream generators, traffic curves
 ingestion/         lake helpers, incremental OLTP extractor
 streaming/         Kafka -> lake consumer (at-least-once) + ClickHouse Kafka engine
+monitoring/        Source-vs-warehouse row counts + the pipeline health snapshot
 spark/             PySpark clean layer: dedup, schema merge, event-time partitioning
 warehouse/         ClickHouse client + lake→raw loader
 dbt/shopstream/    staging → dimensions/facts → marts, snapshots, 125 tests
@@ -470,8 +512,10 @@ docs/img/          screenshots referenced by this README
 - [x] **Phase 6** — PySpark `clean_events`: dedup by `event_id`, merge schema v1/v2,
       partition by event time, reprocess a lookback window and replace those
       partitions; hourly DAG publishing an asset that triggers the warehouse rebuild
-- [ ] **Phase 7** — Data-quality monitoring: source↔warehouse row counts, failure
-      alerts, a pipeline-health panel
+- [x] **Phase 7** — Data-quality monitoring: 101 source↔warehouse row-count checks
+      bounded by the extract watermark, dbt source freshness as a task, a
+      `data_quality` DAG, an `on_failure_callback` that logs and optionally posts to a
+      webhook, and a Pipeline Health panel
 - [ ] **Phase 8** — CI (ruff, sqlfluff, pytest, `dbt build` in a service container)
 - [ ] **Phase 9** — Full README/demo polish and a walkthrough video
 
@@ -485,6 +529,9 @@ docs/img/          screenshots referenced by this README
   deliberate choice — the alternative hides the inconsistency instead of failing the
   monotonicity test.
 - **No CI yet**, so nothing enforces the test suite on push.
+- **The freshness checks fail when the producers are stopped.** That is the intended
+  behaviour — a stale pipeline should be visible — but it means the `data_quality` DAG
+  is red on an idle laptop until you run the stream, the extract and the clean job.
 - **Spark runs inside the Airflow container.** Fine at this scale, but a real
   deployment submits to a cluster and does not put a driver in the scheduler's
   container.

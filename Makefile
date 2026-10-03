@@ -10,7 +10,8 @@ export
 .DEFAULT_GOAL := help
 .PHONY: help env install up-core up-stream up-bi up up-orch down ps logs clean lint fmt test check \
 	schema seed seed-reset gen-orders gen-events extract lake-ls ch-schema load-raw dbt dbt-build \
-	metabase-setup screenshots py shell consume-events kafka-engine spark-clean spark-test
+	metabase-setup screenshots py shell consume-events kafka-engine spark-clean spark-test \
+	quality
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -68,6 +69,9 @@ spark-clean: env ## Spark: raw clickstream -> clean layer (make spark-clean ARGS
 spark-test: env ## Run the Spark tests (they need a JVM, so they run in the container)
 	docker compose --profile core --profile orch --profile spark run --rm --entrypoint pytest spark \
 		tests/test_clean_events.py -m spark -q -p no:cacheprovider
+
+quality: env ## Row-count reconciliation + pipeline health snapshot
+	uv run python -m monitoring.quality all $(ARGS)
 
 extract: env ## Incremental OLTP extract to the lake (make extract ARGS="--tables orders")
 	uv run python -m ingestion.oltp_extract --incremental $(ARGS)

@@ -295,4 +295,94 @@ DASHBOARDS: list[dict] = [
             },
         ],
     },
+    {
+        # Reads the snapshot monitoring/quality.py writes, not the dbt marts: this panel
+        # answers "is the pipeline healthy", which is a different question from "what
+        # did the business do".
+        "name": "Pipeline Health",
+        "description": (
+            "Freshness, dead letters and source-vs-warehouse row counts, from the "
+            "data_quality DAG's hourly snapshot."
+        ),
+        "cards": [
+            {
+                "name": "Checks failing",
+                "display": "scalar",
+                "sql": (
+                    "select countIf(status != 'ok') as failing\nfrom analytics.dq_health_latest"
+                ),
+                "size": {"col": 0, "row": 0, "size_x": 8, "size_y": 4},
+            },
+            {
+                "name": "Row-count mismatches",
+                "display": "scalar",
+                "sql": (
+                    "select countIf(difference != 0) as mismatches\n"
+                    "from analytics.dq_row_counts_latest"
+                ),
+                "size": {"col": 8, "row": 0, "size_x": 8, "size_y": 4},
+            },
+            {
+                "name": "Dead-lettered records (24h)",
+                "display": "scalar",
+                "sql": (
+                    "select metric_value as malformed_last_24h\n"
+                    "from analytics.dq_health_latest\n"
+                    "where metric = 'malformed_last_24h'"
+                ),
+                "size": {"col": 16, "row": 0, "size_x": 8, "size_y": 4},
+            },
+            {
+                "name": "Extract freshness by table",
+                "display": "bar",
+                "sql": (
+                    "select entity, metric_value as hours_since_last_run\n"
+                    "from analytics.dq_health_latest\n"
+                    "where component = 'extract' and metric = 'last_run_age_hours'\n"
+                    "order by hours_since_last_run desc"
+                ),
+                "size": {"col": 0, "row": 4, "size_x": 12, "size_y": 8},
+            },
+            {
+                "name": "Reconciliation by entity",
+                "display": "table",
+                "sql": (
+                    "select\n"
+                    "    entity,\n"
+                    "    grain,\n"
+                    "    count() as checks,\n"
+                    "    countIf(difference != 0) as mismatched,\n"
+                    "    sum(abs(difference)) as total_abs_difference\n"
+                    "from analytics.dq_row_counts_latest\n"
+                    "group by entity, grain\n"
+                    "order by mismatched desc, entity"
+                ),
+                "size": {"col": 12, "row": 4, "size_x": 12, "size_y": 8},
+            },
+            {
+                "name": "Pipeline health (latest snapshot)",
+                "display": "table",
+                "sql": (
+                    "select component, entity, metric, metric_value, status\n"
+                    "from analytics.dq_health_latest\n"
+                    "order by status desc, component, entity, metric"
+                ),
+                "size": {"col": 0, "row": 12, "size_x": 24, "size_y": 9},
+            },
+            {
+                "name": "Reconciliation mismatches",
+                # Empty when everything agrees, which is the point: this card exists to
+                # be blank. It only fills in when the source and warehouse disagree.
+                "display": "table",
+                "sql": (
+                    "select entity, grain, check_date, source_count, warehouse_count,\n"
+                    "       difference, status\n"
+                    "from analytics.dq_row_counts_latest\n"
+                    "where difference != 0\n"
+                    "order by abs(difference) desc"
+                ),
+                "size": {"col": 0, "row": 21, "size_x": 24, "size_y": 6},
+            },
+        ],
+    },
 ]

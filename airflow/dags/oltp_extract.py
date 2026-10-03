@@ -12,12 +12,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from airflow.sdk import dag, task
+from alerts import alert_on_failure
 from shopstream_assets import RAW_OLTP
 
 DEFAULT_ARGS = {
     "retries": 2,
     "retry_delay": timedelta(minutes=1),
     "execution_timeout": timedelta(minutes=20),
+    "on_failure_callback": alert_on_failure,
 }
 
 

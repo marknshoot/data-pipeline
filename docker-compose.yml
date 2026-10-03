@@ -70,8 +70,11 @@ x-airflow-common: &airflow-common
     # Mount only code, never the repo root: keeps .env (and any secret) out of the
     # containers, so config comes solely from Compose `environment`.
     - ./airflow/dags:/opt/airflow/repo/airflow/dags:ro
+    # monitoring/quality.py reads this DDL file as its single source of truth.
+    - ./clickhouse:/opt/airflow/repo/clickhouse:ro
     - ./generators:/opt/airflow/repo/generators:ro
     - ./ingestion:/opt/airflow/repo/ingestion:ro
+    - ./monitoring:/opt/airflow/repo/monitoring:ro
     - ./spark:/opt/airflow/repo/spark:ro
     - ./streaming:/opt/airflow/repo/streaming:ro
     - ./tests:/opt/airflow/repo/tests:ro

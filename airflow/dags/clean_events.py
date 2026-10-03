@@ -21,6 +21,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 from airflow.sdk import dag, task
+from alerts import alert_on_failure
 from shopstream_assets import CLEAN_EVENTS
 
 # Must exceed the producer's maximum lateness (2h), or a late event could arrive for a
@@ -33,6 +34,7 @@ DEFAULT_ARGS = {
     # Spark start-up dominates a run of this size; the timeout only needs to catch a
     # genuinely stuck job.
     "execution_timeout": timedelta(minutes=20),
+    "on_failure_callback": alert_on_failure,
 }
 
 

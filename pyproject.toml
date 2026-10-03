@@ -34,7 +34,9 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# airflow/dags is on the path because the DAG modules import each other by bare name
+# (`alerts`, `shopstream_assets`), exactly as Airflow does.
+pythonpath = [".", "airflow/dags"]
 addopts = "-ra"
 markers = [
     "spark: needs a JVM and pyspark; run with `make spark-test`",
